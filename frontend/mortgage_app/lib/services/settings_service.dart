@@ -7,7 +7,7 @@ class SettingsService {
 
   // API base URL
   static String get apiBaseUrl =>
-      _box.get('apiBaseUrl', defaultValue: 'http://192.168.137.196:8000/api');
+      _box.get('apiBaseUrl', defaultValue: 'https://mortgage-api-l4sf.onrender.com/api');
 
   static Future<void> setApiBaseUrl(String url) =>
       _box.put('apiBaseUrl', url);
