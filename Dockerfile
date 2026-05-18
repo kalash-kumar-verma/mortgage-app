@@ -33,7 +33,8 @@ RUN useradd --no-create-home --shell /bin/false appuser \
 USER appuser
 
 # Collect static files into /app/staticfiles
-RUN python manage.py collectstatic --noinput
+# A dummy SECRET_KEY is passed so collectstatic succeeds without real env vars
+RUN SECRET_KEY=build-time-dummy-key python manage.py collectstatic --noinput
 
 # Expose port (Cloud platforms set $PORT; default to 8000 locally)
 EXPOSE 8000

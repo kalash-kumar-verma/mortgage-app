@@ -192,3 +192,15 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER   = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS             = 'DENY'
+    SECURE_SSL_REDIRECT         = True
+    SECURE_HSTS_SECONDS         = 31536000   # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SESSION_COOKIE_SECURE       = True
+    CSRF_COOKIE_SECURE          = True
+
+# CSRF trusted origins — required for Django 4.x when behind a proxy / on HTTPS.
+# Comma-separated list of full origins (scheme + host).
+# Example: CSRF_TRUSTED_ORIGINS=https://yourapp.onrender.com
+_csrf_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
+if _csrf_env:
+    CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_env.split(',') if o.strip()]
