@@ -1,10 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:hive/hive.dart';
-import 'package:uuid/uuid.dart';
 import '../models/entry.dart';
-import '../models/sync_action.dart';
-import '../services/api_service.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
 import 'receipt_screen.dart';
@@ -28,6 +23,18 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
     super.dispose();
   }
 
+  /// Compute total payable locally: principal + simple monthly interest.
+  /// Mirrors the Django server's total_payable @property — accurate offline.
+  double get _computedTotalPayable {
+    final principal = double.tryParse(widget.entry.amount) ?? 0.0;
+    final monthlyRate = double.tryParse(widget.entry.interest) ?? 0.0;
+    final entryDate = DateTime.tryParse(widget.entry.date) ?? DateTime.now();
+    final daysElapsed = DateTime.now().difference(entryDate).inDays;
+    // Simple interest: Principal × Rate/100 × (days / 30)
+    final interest = principal * (monthlyRate / 100) * (daysElapsed / 30);
+    return principal + interest;
+  }
+
   Future<void> _withdraw() async {
     final pin = SettingsService.withdrawPin;
     if (_pinController.text != pin) {
@@ -36,13 +43,12 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
     }
 
     setState(() { _loading = true; _error = null; });
-    if (widget.entry.id == null) {
-      setState(() { _loading = false; _error = 'Entry is not synced yet.'; });
-      return;
-    }
+
+    // Bug #3 fix: removed the entry.id == null guard.
+    // Offline-created entries have a *negative* local ID, not null.
+    // LocalDbService.withdrawEntry handles both synced (positive ID) and
+    // unsynced (negative ID, uses syncId endpoint) entries correctly.
     try {
-      // Offline-first approach: Instantly update locally and queue the action.
-      // SyncManager will handle the server communication in the background.
       await LocalDbService.withdrawEntry(widget.entry);
 
       if (mounted) {
@@ -60,6 +66,10 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final totalPayable = _computedTotalPayable;
+    final principal = double.tryParse(widget.entry.amount) ?? 0.0;
+    final interestAmount = totalPayable - principal;
+
     return Scaffold(
       appBar: AppBar(title: Text('Withdraw ${widget.entry.srNumber}')),
       body: Padding(
@@ -76,8 +86,13 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
                     const Text('Total Amount to Collect', style: TextStyle(fontSize: 16, color: Colors.blueGrey)),
                     const SizedBox(height: 8),
                     Text(
-                      '₹${widget.entry.totalPayable.toStringAsFixed(2)}',
+                      '₹${totalPayable.toStringAsFixed(2)}',
                       style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.blue),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Principal: ₹${principal.toStringAsFixed(2)}  |  Interest: ₹${interestAmount.toStringAsFixed(2)}',
+                      style: TextStyle(fontSize: 12, color: Colors.blueGrey[400]),
                     ),
                   ],
                 ),

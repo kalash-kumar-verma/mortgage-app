@@ -2,67 +2,164 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import '../models/sync_action.dart';
 import 'api_service.dart';
 import 'local_db_service.dart';
 import 'settings_service.dart';
 
+/// SyncManager — Offline-first background sync engine.
+///
+/// Responsibilities:
+///   1. Push pending local operations to server (chronological order)
+///   2. Pull new server records into local Hive store
+///   3. Recover from crash (reset stuck "syncing" actions on startup)
+///   4. Retry failed actions on a periodic timer (60s)
+///   5. Prevent duplicate operation processing via idempotency keys
+///   6. Expose reactive notifiers for UI (isSyncing, isOnline, pendingCount)
+///
+/// Architecture:
+///   - Singleton pattern (one instance per app lifecycle)
+///   - All mutations go through LocalDbService first (local-first guarantee)
+///   - SyncManager only reads the queue and pushes — never writes app data directly
 class SyncManager {
   static final SyncManager _instance = SyncManager._internal();
   factory SyncManager() => _instance;
   SyncManager._internal();
 
-  late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
-  bool _isSyncing = false;
+  // ─── Public Notifiers (subscribe in any widget) ───────────────────────────
+
+  /// True while a sync cycle is running.
   final ValueNotifier<bool> isSyncingNotifier = ValueNotifier(false);
 
+  /// True when the device has an active internet connection.
+  final ValueNotifier<bool> isOnlineNotifier = ValueNotifier(false);
+
+  /// Number of pending sync operations in the queue.
+  /// Includes pending + failed-but-retryable actions.
+  final ValueNotifier<int> pendingCountNotifier = ValueNotifier(0);
+
+  // ─── Private State ────────────────────────────────────────────────────────
+
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  Timer? _retryTimer;
+  bool _isSyncing = false;
+  bool _initialized = false;
+
+  // ─── Lifecycle ────────────────────────────────────────────────────────────
+
+  /// Call once after user boxes are opened (after login or on app resume).
   void initialize() {
-    _connectivitySubscription =
-        Connectivity().onConnectivityChanged.listen(_onConnectivityChanged);
-    // Purge corrupted queue actions (safety net)
-    _purgeInvalidActions();
-    // Attempt sync immediately on startup
+    if (_initialized) return;
+    _initialized = true;
+
+    debugPrint('[SyncManager] Initializing...');
+
+    // ① Crash recovery: reset any action that was stuck mid-flight
+    _resetStuckSyncingActions();
+
+    // ② Update pending count for UI
+    _updatePendingCount();
+
+    // ③ Check initial connectivity
+    _checkInitialConnectivity();
+
+    // ④ Listen for connectivity changes
+    _connectivitySubscription = Connectivity()
+        .onConnectivityChanged
+        .listen(_onConnectivityChanged);
+
+    // ⑤ Periodic retry timer — 60s interval
+    //    Catches failures that didn't trigger a connectivity event
+    //    (e.g., server was down but network was up)
+    _retryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      debugPrint('[SyncManager] Periodic retry tick...');
+      _syncAll();
+    });
+
+    // ⑥ Attempt an immediate sync on startup
     _syncAll();
   }
 
-  Future<void> _purgeInvalidActions() async {
-    final box = LocalDbService.syncBox;
-    final toDelete = <dynamic>[];
-    for (final key in box.keys) {
-      final action = box.get(key);
-      if (action == null) continue;
-      if (action.payload == null || action.payload!.isEmpty) continue;
-      try {
-        jsonDecode(action.payload!);
-      } catch (_) {
-        toDelete.add(key);
+  void dispose() {
+    _connectivitySubscription?.cancel();
+    _retryTimer?.cancel();
+    _connectivitySubscription = null;
+    _retryTimer = null;
+    _initialized = false;
+    _isSyncing = false;
+    isSyncingNotifier.value = false;
+    pendingCountNotifier.value = 0;
+    debugPrint('[SyncManager] Disposed.');
+  }
+
+  // ─── Crash Recovery ───────────────────────────────────────────────────────
+
+  /// Reset actions that were marked "syncing" but the app crashed before
+  /// they could be confirmed as synced or failed.
+  /// These actions will be re-attempted on the next sync cycle.
+  void _resetStuckSyncingActions() {
+    try {
+      final box = LocalDbService.syncBox;
+      int resetCount = 0;
+      for (final key in box.keys) {
+        final action = box.get(key);
+        if (action == null) continue;
+        if (action.status == SyncStatus.syncing || action.isSyncing) {
+          action.status    = SyncStatus.pending;
+          action.isSyncing = false;
+          action.save();  // fire-and-forget (sync-safe for Hive)
+          resetCount++;
+        }
       }
-    }
-    if (toDelete.isNotEmpty) {
-      await box.deleteAll(toDelete);
-      debugPrint('[SyncManager] Purged ${toDelete.length} corrupted sync actions.');
+      if (resetCount > 0) {
+        debugPrint('[SyncManager] Reset $resetCount stuck syncing action(s) → pending.');
+      }
+    } catch (e) {
+      debugPrint('[SyncManager] _resetStuckSyncingActions error: $e');
     }
   }
 
-  void dispose() {
-    _connectivitySubscription.cancel();
+  // ─── Connectivity Handling ────────────────────────────────────────────────
+
+  Future<void> _checkInitialConnectivity() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      final online = !results.contains(ConnectivityResult.none);
+      isOnlineNotifier.value = online;
+    } catch (_) {
+      isOnlineNotifier.value = false;
+    }
   }
 
   void _onConnectivityChanged(List<ConnectivityResult> result) {
-    if (!result.contains(ConnectivityResult.none)) {
-      // Came back online — push local changes then pull fresh data
+    final nowOnline = !result.contains(ConnectivityResult.none);
+    final wasOnline = isOnlineNotifier.value;
+    isOnlineNotifier.value = nowOnline;
+
+    if (nowOnline && !wasOnline) {
+      // Just came back online — sync immediately
+      debugPrint('[SyncManager] Network restored — triggering sync.');
       _syncAll();
+    } else if (!nowOnline) {
+      debugPrint('[SyncManager] Network lost — sync will resume when online.');
     }
   }
 
-  /// Full sync: 1) Push pending local changes → server  2) Pull new server data → local
+  // ─── Sync Orchestration ───────────────────────────────────────────────────
+
+  /// Full sync cycle: push pending local changes → pull new server data.
+  /// Guards against concurrent cycles with _isSyncing flag.
   Future<void> _syncAll() async {
     if (_isSyncing) return;
 
+    // Double-check connectivity before proceeding
     final results = await Connectivity().checkConnectivity();
-    if (results.contains(ConnectivityResult.none)) return;
+    if (results.contains(ConnectivityResult.none)) {
+      isOnlineNotifier.value = false;
+      return;
+    }
+    isOnlineNotifier.value = true;
 
     _isSyncing = true;
     isSyncingNotifier.value = true;
@@ -73,79 +170,141 @@ class SyncManager {
     } finally {
       _isSyncing = false;
       isSyncingNotifier.value = false;
+      _updatePendingCount();
     }
   }
 
-  /// Push all queued sync actions to the server in chronological order.
+  /// Update the pending count notifier — called after every sync attempt.
+  void _updatePendingCount() {
+    try {
+      pendingCountNotifier.value = LocalDbService.getPendingActions().length;
+    } catch (_) {
+      pendingCountNotifier.value = 0;
+    }
+  }
+
+  // ─── Push Queue ───────────────────────────────────────────────────────────
+
+  /// Push pending sync actions to server in FIFO order.
+  ///
+  /// Key guarantees:
+  ///   - Actions are processed oldest-first (chronological FIFO)
+  ///   - Parent records must sync before child records (Party → Entry → Item)
+  ///   - On first failure: stop the cycle (preserve ordering integrity)
+  ///   - Failed actions have retryCount incremented
+  ///   - Actions exceeding maxRetries are abandoned (logged, not deleted)
+  ///   - Idempotency key sent with every request (safe to retry)
   Future<void> _pushQueue() async {
     final box = LocalDbService.syncBox;
 
-    // Process oldest first to maintain relational ordering
+    // Oldest-first ordering — critical for relational integrity
     final actions = box.values.toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     for (final action in actions) {
-      if (action.isSyncing) continue;
+      // Skip: already at max retries (abandoned)
+      if (action.isAbandoned) {
+        debugPrint('[SyncManager] Skipping abandoned action: ${action.endpoint} (${action.retryCount} retries)');
+        continue;
+      }
 
+      // Skip: currently in flight (shouldn't happen after crash recovery, but defensive)
+      if (action.status == SyncStatus.syncing) continue;
+
+      // Mark as in-flight (persisted so crash recovery works)
+      action.status    = SyncStatus.syncing;
       action.isSyncing = true;
       await action.save();
 
       try {
         await _processAction(action);
-        await box.delete(action.id); // Success — remove from queue
+        // ✅ Success — remove from queue
+        await box.delete(action.id);
+        debugPrint('[SyncManager] ✓ ${action.method} ${action.endpoint}');
       } catch (e) {
-        debugPrint('[SyncManager] Push failed for ${action.endpoint}: $e');
-        action.isSyncing = false;
-        await action.save();
-        break; // Stop on first failure to preserve ordering
+        if (e is FormatException && e.message.startsWith('CONFLICT_409:')) {
+          action.status        = SyncStatus.conflict;
+          action.isSyncing     = false;
+          // Note: we do NOT increment retryCount on conflict
+          action.failureReason = e.message.substring('CONFLICT_409:'.length);
+          await action.save();
+          debugPrint('[SyncManager] ✗ Conflict on ${action.endpoint}: ${action.failureReason}');
+        } else {
+          // ❌ Failure — record it, stop processing to preserve ordering
+          action.status        = SyncStatus.failed;
+          action.isSyncing     = false;
+          action.retryCount    += 1;
+          action.failureReason = e.toString();
+          await action.save();
+
+          debugPrint('[SyncManager] ✗ ${action.method} ${action.endpoint} '
+              '— attempt ${action.retryCount}/${SyncAction.maxRetries}: $e');
+
+          if (action.isAbandoned) {
+            debugPrint('[SyncManager] ⚠ Action abandoned after ${SyncAction.maxRetries} retries: ${action.endpoint}');
+          }
+        }
+
+        // Stop on first failure — next cycle will retry from here
+        break;
       }
     }
   }
 
-  /// Process a single queued action against the server.
+  // ─── Process Single Action ────────────────────────────────────────────────
+
+  /// Sends one queued action to the server.
+  ///
+  /// Handles:
+  ///   - UUID → real ID resolution for parent records
+  ///   - Multipart upload for jewellery item images
+  ///   - Idempotency key header (safe replay on network failure)
+  ///   - Local ID update after successful POST (real server ID written back)
   Future<void> _processAction(SyncAction action) async {
     final token = SettingsService.token;
-    final headers = <String, String>{'Content-Type': 'application/json'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      // Server uses this to de-duplicate retried requests.
+      // If the server processed this key before, it returns the existing record.
+      'X-Idempotency-Key': action.idempotencyKey,
+    };
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Token $token';
     }
 
-    // Parse the stored JSON payload
+    // ── Parse payload ──
     Map<String, dynamic>? payloadMap;
     if (action.payload != null && action.payload!.isNotEmpty) {
       try {
         payloadMap = jsonDecode(action.payload!) as Map<String, dynamic>;
       } catch (e) {
-        debugPrint('[SyncManager] Invalid JSON — skipping ${action.endpoint}');
-        return; // Skip corrupted action silently
+        debugPrint('[SyncManager] Invalid JSON in action — skipping: ${action.endpoint}');
+        return; // Skip corrupted action rather than crashing
       }
     }
 
-    // ── Resolve party_sync_id for POST entries/ ──
+    // ── Resolve party_sync_id → real party ID for POST entries/ ──
     if (action.endpoint == 'entries/' && payloadMap != null) {
       if (payloadMap.containsKey('party_sync_id')) {
         final p = LocalDbService.partyBox.get(payloadMap['party_sync_id']);
         if (p == null || p.id == null || p.id! <= 0) {
-          throw Exception('Parent party not yet synced to server');
+          throw Exception('Parent party not yet synced to server — deferring entry sync');
         }
         payloadMap['party'] = p.id;
         payloadMap.remove('party_sync_id');
       }
     }
 
-    // ── UUID Resolution for withdraw endpoints ──
-    // e.g.  entries/{syncId}/withdraw/  →  entries/{realId}/withdraw/
+    // ── Resolve UUID in endpoint → real integer ID ──
+    // e.g. "entries/{syncId}/withdraw/" → "entries/42/withdraw/"
     String endpoint = action.endpoint;
     final uuidRegExp = RegExp(
         r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
     if (uuidRegExp.hasMatch(endpoint)) {
       final match = uuidRegExp.firstMatch(endpoint)!.group(0)!;
       int? realId;
-
-      // Check entries (withdraw uses entry syncId)
       final e = LocalDbService.entryBox.get(match);
       if (e != null && e.id != null && e.id! > 0) realId = e.id;
-
       if (realId == null) {
         throw Exception('Object not yet synced to server (UUID: $match)');
       }
@@ -154,132 +313,164 @@ class SyncManager {
 
     final uri = Uri.parse('${ApiService.baseUrl}/$endpoint');
 
+    // ── Execute HTTP request ──
     http.Response response;
 
     switch (action.method.toUpperCase()) {
       case 'POST':
         if (action.endpoint == 'items/') {
-          // Items may include an image — use multipart
-          final request = http.MultipartRequest('POST', uri);
-          if (token != null && token.isNotEmpty) {
-            request.headers['Authorization'] = 'Token $token';
-          }
-          final map = payloadMap ?? {};
-
-          // Resolve entry_sync_id to real server ID
-          if (map.containsKey('entry_sync_id')) {
-            final e = LocalDbService.entryBox.get(map['entry_sync_id']);
-            if (e == null || e.id == null || e.id! <= 0) {
-              throw Exception('Parent entry not yet synced to server');
-            }
-            map['entry'] = e.id;
-            map.remove('entry_sync_id');
-          }
-
-          request.fields['entry']     = map['entry'].toString();
-          request.fields['item_type'] = map['item_type']?.toString() ?? '';
-          request.fields['name']      = map['name']?.toString() ?? '';
-          request.fields['note']      = map['note']?.toString() ?? '';
-          if (map['sync_id'] != null) {
-            request.fields['sync_id'] = map['sync_id'].toString();
-          }
-          if (map['weight'] != null && map['weight'].toString().isNotEmpty) {
-            request.fields['weight'] = map['weight'].toString();
-          }
-          if (map['image'] != null && map['image'].toString().isNotEmpty) {
-            try {
-              request.files.add(
-                  await http.MultipartFile.fromPath('image', map['image'].toString()));
-            } catch (_) {
-              // Image no longer on disk — skip
-            }
-          }
-
-          final streamed = await request.send().timeout(const Duration(seconds: 15));
-          response = await http.Response.fromStream(streamed);
+          response = await _postItem(uri, payloadMap ?? {}, token);
         } else {
           final body = payloadMap != null ? jsonEncode(payloadMap) : null;
-          response = await http.post(uri, headers: headers, body: body)
-              .timeout(const Duration(seconds: 10));
+          response = await http
+              .post(uri, headers: headers, body: body)
+              .timeout(const Duration(seconds: 15));
         }
         break;
 
       case 'PATCH':
         final body = payloadMap != null ? jsonEncode(payloadMap) : null;
-        response = await http.patch(uri, headers: headers, body: body)
-            .timeout(const Duration(seconds: 10));
+        response = await http
+            .patch(uri, headers: headers, body: body)
+            .timeout(const Duration(seconds: 15));
         break;
 
       case 'DELETE':
-        response = await http.delete(uri, headers: headers)
-            .timeout(const Duration(seconds: 10));
+        response = await http
+            .delete(uri, headers: headers)
+            .timeout(const Duration(seconds: 15));
         break;
 
       default:
+        debugPrint('[SyncManager] Unknown method ${action.method} — skipping');
         return;
     }
 
-    if (response.statusCode >= 400) {
-      throw Exception('Sync Failed [${response.statusCode}]: ${response.body}');
+    // ── Check response ──
+    if (response.statusCode == 409) {
+      // Parse conflict info if available
+      String errMsg = 'Conflict: version mismatch';
+      try {
+         final body = jsonDecode(response.body);
+         if (body['message'] != null) errMsg = body['message'].toString();
+      } catch (_) {}
+      throw FormatException('CONFLICT_409:$errMsg');
     }
 
-    // ── After successful POST: update local record with real server ID ──
-    if (action.method.toUpperCase() == 'POST' && response.body.isNotEmpty) {
-      try {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final newId = data['id'] as int?;
-        final syncId = data['sync_id'] as String?;
+    // 404 on DELETE = already deleted on server → treat as success
+    final isDeleteNotFound = action.method.toUpperCase() == 'DELETE' &&
+        response.statusCode == 404;
+    if (!isDeleteNotFound && response.statusCode >= 400) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
 
-        if (newId != null && syncId != null) {
-          if (action.endpoint == 'parties/') {
-            final p = LocalDbService.partyBox.get(syncId);
-            if (p != null) {
-              final oldId = p.id;
-              p.id = newId;
-              await LocalDbService.partyBox.put(syncId, p);
-              if (oldId != null && oldId < 0) {
-                for (final e in LocalDbService.entryBox.values
-                    .where((e) => e.party == oldId)
-                    .toList()) {
-                  e.party = newId;
-                  await e.save();
-                }
-              }
-            }
-          } else if (action.endpoint == 'entries/') {
-            final e = LocalDbService.entryBox.get(syncId);
-            if (e != null) {
-              final oldId = e.id;
-              if (data['sr_number'] != null) {
-                e.srNumber = data['sr_number'] as String;
-              }
-              e.id = newId;
-              await LocalDbService.entryBox.put(syncId, e);
-              if (oldId != null && oldId < 0) {
-                for (final i in LocalDbService.itemBox.values
-                    .where((i) => i.entry == oldId)
-                    .toList()) {
-                  i.entry = newId;
-                  await i.save();
-                }
-              }
-            }
-          } else if (action.endpoint == 'items/') {
-            final i = LocalDbService.itemBox.get(syncId);
-            if (i != null) {
-              i.id = newId;
-              await LocalDbService.itemBox.put(syncId, i);
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint('[SyncManager] Failed to update local IDs after POST: $e');
-      }
+    // ── Write back server-assigned IDs after successful POST ──
+    if (action.method.toUpperCase() == 'POST' && response.body.isNotEmpty) {
+      await _resolveServerIds(action.endpoint, response.body);
     }
   }
 
-  /// Pull sync: Strictly additive — only adds truly NEW records from the server.
-  /// Never overwrites local data. Tombstoned records are always skipped.
+  /// Handles multipart POST for jewellery items (may include an image file).
+  Future<http.Response> _postItem(
+      Uri uri, Map<String, dynamic> map, String? token) async {
+    final request = http.MultipartRequest('POST', uri);
+    if (token != null && token.isNotEmpty) {
+      request.headers['Authorization'] = 'Token $token';
+    }
+
+    // Resolve entry_sync_id → real entry ID
+    if (map.containsKey('entry_sync_id')) {
+      final e = LocalDbService.entryBox.get(map['entry_sync_id']);
+      if (e == null || e.id == null || e.id! <= 0) {
+        throw Exception('Parent entry not yet synced to server');
+      }
+      map['entry'] = e.id;
+      map.remove('entry_sync_id');
+    }
+
+    request.fields['entry']     = map['entry'].toString();
+    request.fields['item_type'] = map['item_type']?.toString() ?? '';
+    request.fields['name']      = map['name']?.toString() ?? '';
+    request.fields['note']      = map['note']?.toString() ?? '';
+    if (map['sync_id'] != null) request.fields['sync_id'] = map['sync_id'].toString();
+    if (map['weight'] != null && map['weight'].toString().isNotEmpty) {
+      request.fields['weight'] = map['weight'].toString();
+    }
+    if (map['image'] != null && map['image'].toString().isNotEmpty) {
+      try {
+        request.files.add(
+            await http.MultipartFile.fromPath('image', map['image'].toString()));
+      } catch (_) {
+        // Image no longer on disk — upload without photo
+      }
+    }
+
+    final streamed = await request.send().timeout(const Duration(seconds: 20));
+    return http.Response.fromStream(streamed);
+  }
+
+  /// After a successful POST, update the local Hive record with the real
+  /// server-assigned integer ID, and cascade the ID to any child records.
+  Future<void> _resolveServerIds(String endpoint, String responseBody) async {
+    try {
+      final data   = jsonDecode(responseBody) as Map<String, dynamic>;
+      final newId  = data['id']      as int?;
+      final syncId = data['sync_id'] as String?;
+      if (newId == null || syncId == null) return;
+
+      if (endpoint == 'parties/') {
+        final p = LocalDbService.partyBox.get(syncId);
+        if (p != null) {
+          final oldId = p.id;
+          p.id = newId;
+          await LocalDbService.partyBox.put(syncId, p);
+          // Cascade to entries that linked via negative temp ID
+          if (oldId != null && oldId < 0) {
+            for (final e in LocalDbService.entryBox.values
+                .where((e) => e.party == oldId)
+                .toList()) {
+              e.party = newId;
+              await e.save();
+            }
+          }
+        }
+      } else if (endpoint == 'entries/') {
+        final e = LocalDbService.entryBox.get(syncId);
+        if (e != null) {
+          final oldId = e.id;
+          if (data['sr_number'] != null) e.srNumber = data['sr_number'] as String;
+          e.id = newId;
+          await LocalDbService.entryBox.put(syncId, e);
+          // Cascade to items that linked via negative temp ID
+          if (oldId != null && oldId < 0) {
+            for (final i in LocalDbService.itemBox.values
+                .where((i) => i.entry == oldId)
+                .toList()) {
+              i.entry = newId;
+              await i.save();
+            }
+          }
+        }
+      } else if (endpoint == 'items/') {
+        final i = LocalDbService.itemBox.get(syncId);
+        if (i != null) {
+          i.id = newId;
+          await LocalDbService.itemBox.put(syncId, i);
+        }
+      }
+    } catch (e) {
+      debugPrint('[SyncManager] _resolveServerIds error: $e');
+    }
+  }
+
+  // ─── Pull Sync ────────────────────────────────────────────────────────────
+
+  /// Pull new records from server into local Hive store.
+  ///
+  /// Rules:
+  ///   - ADDITIVE ONLY — never overwrites existing local records
+  ///   - Tombstoned records (locally deleted) are never resurrected
+  ///   - Gracefully handles server downtime (logs, uses cached data)
   Future<void> _smartPullSync() async {
     try {
       final serverParties = await ApiService().fetchParties();
@@ -287,23 +478,19 @@ class SyncManager {
       for (final serverParty in serverParties) {
         serverParty.syncId ??= 'server-${serverParty.id}';
 
-        // TOMBSTONE: This party was deleted locally — never resurrect
         if (LocalDbService.isTombstoned(serverParty.syncId)) continue;
 
-        // Only add if completely absent locally
         final localParty = LocalDbService.partyBox.get(serverParty.syncId);
         if (localParty == null) {
           await LocalDbService.saveParty(serverParty, isSync: true);
         }
 
-        // Pull entries for this party
         if (serverParty.id == null) continue;
         final serverEntries = await ApiService().fetchEntries(serverParty.id!);
 
         for (final serverEntry in serverEntries) {
           serverEntry.syncId ??= 'server-${serverEntry.id}';
 
-          // TOMBSTONE: This entry was deleted locally — never resurrect
           if (LocalDbService.isTombstoned(serverEntry.syncId)) continue;
 
           final localEntry = LocalDbService.entryBox.get(serverEntry.syncId);
@@ -311,12 +498,12 @@ class SyncManager {
             await LocalDbService.saveEntry(serverEntry, isSync: true);
           }
 
-          // Pull items for this entry
           if (serverEntry.id == null) continue;
           final serverItems = await ApiService().fetchItems(serverEntry.id!);
 
           for (final serverItem in serverItems) {
             serverItem.syncId ??= 'server-${serverItem.id}';
+            if (LocalDbService.isTombstoned(serverItem.syncId)) continue;
             final localItem = LocalDbService.itemBox.get(serverItem.syncId);
             if (localItem == null) {
               await LocalDbService.saveItem(serverItem, isSync: true);
@@ -324,14 +511,43 @@ class SyncManager {
           }
         }
       }
+      
+      // If we got here without exception, pull was completely successful
+      await SettingsService.setLastSyncedAt(DateTime.now());
+      
     } catch (e) {
-      debugPrint('[SyncManager] Smart pull failed: $e — using cached data');
+      debugPrint('[SyncManager] Pull sync failed: $e — using cached local data.');
     }
   }
 
-  /// Force a full sync manually (e.g., called after login)
-  Future<void> performFullSync() async => _syncAll();
+  // ─── Public API ───────────────────────────────────────────────────────────
 
-  /// Legacy alias kept for compatibility
-  Future<void> performFullPullSync() async => _smartPullSync();
+  /// Trigger a full sync manually (e.g., pull-to-refresh, after login).
+  Future<void> performFullSync() => _syncAll();
+
+  /// Trigger pull-only sync (e.g., for read-heavy screens).
+  Future<void> performFullPullSync() => _smartPullSync();
+
+  /// Return a human-readable summary of the current queue state.
+  /// Useful for debug UI in settings screen.
+  Map<String, int> getQueueStats() {
+    int pending = 0, syncing = 0, failed = 0, abandoned = 0, conflict = 0;
+    try {
+      for (final action in LocalDbService.syncBox.values) {
+        if (action.isAbandoned)                        { abandoned++; }
+        else if (action.status == SyncStatus.conflict) { conflict++;  }
+        else if (action.status == SyncStatus.syncing)  { syncing++;   }
+        else if (action.status == SyncStatus.failed)   { failed++;    }
+        else                                           { pending++;   }
+      }
+    } catch (_) {}
+    return {'pending': pending, 'syncing': syncing, 'failed': failed, 'abandoned': abandoned, 'conflict': conflict};
+  }
+
+  /// Returns all queued actions in FIFO order (used for diagnostics)
+  List<SyncAction> getQueueDrainOrder() {
+    final actions = LocalDbService.syncBox.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return actions;
+  }
 }

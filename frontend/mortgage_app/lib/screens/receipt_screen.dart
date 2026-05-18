@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../services/api_service.dart';
+import '../services/local_db_service.dart';
 import '../services/pdf_receipt_service.dart';
 
 class ReceiptScreen extends StatefulWidget {
@@ -24,15 +25,32 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   Future<void> _loadItems() async {
-    if (widget.entry.id == null) {
-      setState(() => _loadingItems = false);
-      return;
-    }
+    // LOCAL FIRST: load from Hive by syncId (works offline, works before sync)
+    final local = widget.entry.syncId != null
+        ? LocalDbService.getItemsForEntrySyncId(widget.entry.syncId!)
+        : LocalDbService.getItemsForEntry(widget.entry.id ?? -1);
+    if (mounted) setState(() { _items = local; _loadingItems = false; });
+
+    // ONLINE REFRESH: if entry has a real server ID, pull fresh items from API
+    final hasRealId = widget.entry.id != null && widget.entry.id! > 0;
+    if (!hasRealId) return;
     try {
-      final items = await ApiService().fetchItems(widget.entry.id!);
-      setState(() { _items = items; _loadingItems = false; });
+      final serverItems = await ApiService().fetchItems(widget.entry.id!)
+          .timeout(const Duration(seconds: 5));
+      for (final item in serverItems) {
+        item.syncId ??= 'server-${item.id}';
+        if (LocalDbService.isTombstoned(item.syncId)) continue;
+        await LocalDbService.saveItem(item, isSync: true);
+      }
+      // Reload from local (now up to date with server)
+      if (mounted) {
+        final updated = widget.entry.syncId != null
+            ? LocalDbService.getItemsForEntrySyncId(widget.entry.syncId!)
+            : LocalDbService.getItemsForEntry(widget.entry.id!);
+        setState(() => _items = updated);
+      }
     } catch (_) {
-      setState(() => _loadingItems = false);
+      // Server unavailable — already showing local data above
     }
   }
 

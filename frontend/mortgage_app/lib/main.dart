@@ -10,16 +10,23 @@ import 'services/settings_service.dart';
 
 import 'services/local_db_service.dart';
 import 'services/sync_manager.dart';
-import 'models/sync_action.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await Hive.openBox('settings');
-  
+
+  // Register Hive adapters + open global tombstone box
   await LocalDbService.init();
 
-  SyncManager().initialize();
+  // If a user is already logged in, restore their namespace and open their boxes
+  final savedUsername = SettingsService.username ?? '';
+  final savedToken    = SettingsService.token ?? '';
+  if (savedToken.isNotEmpty && savedUsername.isNotEmpty) {
+    LocalDbService.setUserNamespace(savedUsername);
+    await LocalDbService.openUserBoxes();
+    SyncManager().initialize();
+  }
 
   runApp(const MortgageApp());
 }

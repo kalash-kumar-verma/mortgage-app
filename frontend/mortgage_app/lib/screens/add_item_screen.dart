@@ -1,12 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import '../services/api_service.dart';
 import '../services/local_db_service.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import 'package:uuid/uuid.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 
 class AddItemScreen extends StatefulWidget {
   final Entry entry;

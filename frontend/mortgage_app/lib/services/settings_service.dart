@@ -7,7 +7,7 @@ class SettingsService {
 
   // API base URL
   static String get apiBaseUrl =>
-      _box.get('apiBaseUrl', defaultValue: 'http://172.16.142.66:8000/api');
+      _box.get('apiBaseUrl', defaultValue: 'http://192.168.137.196:8000/api');
 
   static Future<void> setApiBaseUrl(String url) =>
       _box.put('apiBaseUrl', url);
@@ -52,4 +52,13 @@ class SettingsService {
 
   static Future<void> setDefaultInterest(String rate) =>
       _box.put('defaultInterest', rate);
+
+  // Last Synced Timestamp
+  static DateTime? get lastSyncedAt {
+    final iso = _box.get('last_synced_at');
+    return iso != null ? DateTime.tryParse(iso) : null;
+  }
+
+  static Future<void> setLastSyncedAt(DateTime dt) =>
+      _box.put('last_synced_at', dt.toIso8601String());
 }

@@ -31,9 +31,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   Future<void> _loadItems() async {
     setState(() => _loadingItems = true);
 
-    // LOCAL FIRST: always load from Hive immediately (works offline + online)
-    final hasRealId = _entry.id != null && _entry.id! > 0;
-    final localList = LocalDbService.getItemsForEntry(_entry.id ?? -1);
+    // LOCAL FIRST: load from Hive by syncId (Bug #4 fix — more reliable than
+    // integer ID matching, which breaks after sync updates entry.id).
+    final localList = _entry.syncId != null
+        ? LocalDbService.getItemsForEntrySyncId(_entry.syncId!)
+        : LocalDbService.getItemsForEntry(_entry.id ?? -1);
     if (mounted) {
       setState(() {
         _items = localList;
@@ -42,20 +44,24 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     }
 
     // THEN: if online and entry is synced, refresh from server and save locally
+    final hasRealId = _entry.id != null && _entry.id! > 0;
     final connectivity = await Connectivity().checkConnectivity();
     final isOnline = !connectivity.contains(ConnectivityResult.none);
     if (!isOnline || !hasRealId) return;
 
     try {
       final serverList = await ApiService().fetchItems(_entry.id!).timeout(const Duration(seconds: 5));
-      // Save each server item locally (isSync: true so no re-queuing)
       for (var item in serverList) {
         item.syncId ??= 'server-${item.id}';
+        // Bug #15 fix: skip items that were deleted locally (tombstoned)
+        if (LocalDbService.isTombstoned(item.syncId)) continue;
         await LocalDbService.saveItem(item, isSync: true);
       }
       // Reload from local (now contains fresh server data)
       if (mounted) {
-        final updated = LocalDbService.getItemsForEntry(_entry.id!);
+        final updated = _entry.syncId != null
+            ? LocalDbService.getItemsForEntrySyncId(_entry.syncId!)
+            : LocalDbService.getItemsForEntry(_entry.id!);
         setState(() => _items = updated);
       }
     } catch (_) {
@@ -173,8 +179,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   _row('Amount', '₹${_entry.amount}'),
                   _row('Interest', '${_entry.interest}% per month'),
                   _row('Date', _entry.date),
-                  _row('Days Elapsed', '${_entry.daysElapsed} days'),
-                  _row('Total Payable', '₹${_entry.totalPayable.toStringAsFixed(2)}', highlight: true),
+                  _row('Days Elapsed', '${_entry.computedDaysElapsed} days'),
+                  _row('Total Payable', '₹${_entry.computedTotalPayable.toStringAsFixed(2)}', highlight: true),
                   if (_entry.closedAt != null) _row('Closed On', _entry.closedAt!),
                   if (_entry.note.isNotEmpty) ...[
                     const SizedBox(height: 8),
@@ -265,7 +271,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: Image.network(
-                            'http://172.16.142.66:8000${item.image}',
+                            '${ApiService.baseUrl.replaceAll('/api', '')}${item.image}',
                             height: 100,
                             width: double.infinity,
                             fit: BoxFit.cover,

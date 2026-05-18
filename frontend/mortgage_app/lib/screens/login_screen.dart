@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/settings_service.dart';
+import '../services/local_db_service.dart';
 import '../services/sync_manager.dart';
 import '../main.dart';
 import 'settings_screen.dart';
+import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -34,16 +36,22 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final token = data['token'];
+        final data  = jsonDecode(response.body);
+        final token = data['token'] as String;
+        final username = _usernameController.text.trim();
+
         await SettingsService.setToken(token);
-        await SettingsService.setUsername(_usernameController.text);
-        
-        // After login: push any pending local changes first, then pull server data
+        await SettingsService.setUsername(username);
+
+        // Set user namespace and open user-scoped Hive boxes BEFORE navigating
+        LocalDbService.setUserNamespace(username);
+        await LocalDbService.openUserBoxes();
+
+        // Start background sync
         final syncManager = SyncManager();
         syncManager.initialize();
-        syncManager.performFullSync(); // fire-and-forget — don't block navigation
-        
+        syncManager.performFullSync(); // fire-and-forget
+
         if (mounted) {
           Navigator.pushReplacement(
             context,
@@ -146,10 +154,30 @@ class _LoginScreenState extends State<LoginScreen> {
                           backgroundColor: const Color(0xFF5C35D4),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
-                        child: _loading 
-                            ? const CircularProgressIndicator(color: Colors.white) 
+                        child: _loading
+                            ? const CircularProgressIndicator(color: Colors.white)
                             : const Text('Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text("Don't have an account? ", style: TextStyle(color: Colors.grey)),
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const RegisterScreen()),
+                          ),
+                          child: const Text(
+                            'Register',
+                            style: TextStyle(
+                              color: Color(0xFF5C35D4),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

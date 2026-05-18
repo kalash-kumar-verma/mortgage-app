@@ -9,6 +9,7 @@ env/
 # Django
 db.sqlite3
 media/
+staticfiles/
 
 # Flutter/Dart
 .dart_tool/

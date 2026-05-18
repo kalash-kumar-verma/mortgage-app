@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────
+#  docker-compose.yml  —  Local development with Docker
+#
+#  Spins up:
+#    - Django API  (http://localhost:8000)
+#    - PostgreSQL  (localhost:5432)
+#
+#  Usage:
+#    docker compose up --build          # start everything
+#    docker compose up -d               # start in background
+#    docker compose exec api python manage.py createsuperuser
+#    docker compose down -v             # stop + remove volumes
+#
+#  Note: This is for LOCAL DOCKER DEVELOPMENT only.
+#        For production, deploy the API container only + managed Postgres.
+# ─────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mortgage_db
+      POSTGRES_USER: mortgage_user
+      POSTGRES_PASSWORD: mortgage_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mortgage_user -d mortgage_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL to point to the compose db service
+      DATABASE_URL: postgresql://mortgage_user:mortgage_pass@db:5432/mortgage_db
+      DEBUG: "True"
+    volumes:
+      # Mount media for persistent file uploads during development
+      - ./media:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

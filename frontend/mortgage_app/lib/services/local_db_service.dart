@@ -8,37 +8,73 @@ import '../models/jewellery_item.dart';
 import '../models/sync_action.dart';
 
 class LocalDbService {
-  static const String partyBoxName = 'parties';
-  static const String entryBoxName = 'entries';
-  static const String itemBoxName = 'items';
-  static const String syncBoxName = 'sync_queue';
-  // Tombstone box: maps syncId → deleted server integer ID (or 0 if never synced).
-  // Prevents pull sync from ever resurrecting a locally-deleted record.
+  // ─── User Namespace ───────────────────────────────────────────────────────
+  // All data boxes are namespaced per user to prevent cross-user data leakage.
+  // Global boxes (settings, tombstones) are NOT namespaced.
+
+  static String _namespace = 'default';
+
+  static void setUserNamespace(String username) {
+    _namespace = username.isNotEmpty ? username.toLowerCase().trim() : 'default';
+  }
+
+  static String get currentNamespace => _namespace;
+
+  // ─── Box Names ────────────────────────────────────────────────────────────
+
+  static String get partyBoxName     => 'parties_$_namespace';
+  static String get entryBoxName     => 'entries_$_namespace';
+  static String get itemBoxName      => 'items_$_namespace';
+  static String get syncBoxName      => 'sync_queue_$_namespace';
+  // Tombstone box is intentionally GLOBAL (shared across users for safety)
   static const String tombstoneBoxName = 'tombstones';
 
-  static Future<void> init() async {
-    // Idempotent adapter registration — safe to call on hot restart
+  // ─── Adapter Registration (call once in main.dart) ───────────────────────
+
+  static void registerAdapters() {
     if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(PartyAdapter());
     if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(EntryAdapter());
     if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(JewelleryItemAdapter());
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(SyncActionAdapter());
-
-    if (!Hive.isBoxOpen(partyBoxName))    await Hive.openBox<Party>(partyBoxName);
-    if (!Hive.isBoxOpen(entryBoxName))    await Hive.openBox<Entry>(entryBoxName);
-    if (!Hive.isBoxOpen(itemBoxName))     await Hive.openBox<JewelleryItem>(itemBoxName);
-    if (!Hive.isBoxOpen(syncBoxName))     await Hive.openBox<SyncAction>(syncBoxName);
-    if (!Hive.isBoxOpen(tombstoneBoxName)) await Hive.openBox<int>(tombstoneBoxName);
   }
 
-  // ─── Box Getters ──────────────────────────────
-  static Box<Party>          get partyBox     => Hive.box<Party>(partyBoxName);
-  static Box<Entry>          get entryBox     => Hive.box<Entry>(entryBoxName);
-  static Box<JewelleryItem>  get itemBox      => Hive.box<JewelleryItem>(itemBoxName);
-  static Box<SyncAction>     get syncBox      => Hive.box<SyncAction>(syncBoxName);
-  static Box<int>            get tombstoneBox => Hive.box<int>(tombstoneBoxName);
+  /// Open user-specific data boxes. Call after setUserNamespace().
+  static Future<void> openUserBoxes() async {
+    if (!Hive.isBoxOpen(partyBoxName)) await Hive.openBox<Party>(partyBoxName);
+    if (!Hive.isBoxOpen(entryBoxName)) await Hive.openBox<Entry>(entryBoxName);
+    if (!Hive.isBoxOpen(itemBoxName))  await Hive.openBox<JewelleryItem>(itemBoxName);
+    if (!Hive.isBoxOpen(syncBoxName))  await Hive.openBox<SyncAction>(syncBoxName);
+  }
 
-  // ─── Tombstone helpers ─────────────────────────
-  // A tombstone stores: syncId → server integer ID (0 if never reached server)
+  /// Close user-specific data boxes. Call on logout.
+  static Future<void> closeUserBoxes() async {
+    if (Hive.isBoxOpen(partyBoxName)) await Hive.box<Party>(partyBoxName).close();
+    if (Hive.isBoxOpen(entryBoxName)) await Hive.box<Entry>(entryBoxName).close();
+    if (Hive.isBoxOpen(itemBoxName))  await Hive.box<JewelleryItem>(itemBoxName).close();
+    if (Hive.isBoxOpen(syncBoxName))  await Hive.box<SyncAction>(syncBoxName).close();
+  }
+
+  /// Global init: registers adapters and opens the tombstone box.
+  /// Call ONCE in main() before runApp.
+  static Future<void> init() async {
+    registerAdapters();
+    if (!Hive.isBoxOpen(tombstoneBoxName)) {
+      await Hive.openBox<int>(tombstoneBoxName);
+    }
+  }
+
+  // ─── Box Getters ──────────────────────────────────────────────────────────
+
+  static Box<Party>           get partyBox     => Hive.box<Party>(partyBoxName);
+  static Box<Entry>           get entryBox     => Hive.box<Entry>(entryBoxName);
+  static Box<JewelleryItem>   get itemBox      => Hive.box<JewelleryItem>(itemBoxName);
+  static Box<SyncAction>      get syncBox      => Hive.box<SyncAction>(syncBoxName);
+  static Box<int>             get tombstoneBox => Hive.box<int>(tombstoneBoxName);
+
+  // ─── Tombstone Helpers ────────────────────────────────────────────────────
+  // Tombstones are global: if a record was deleted on this device, it should
+  // never be resurrected regardless of which user account is active.
+
   static Future<void> _addTombstone(String syncId, int serverId) async {
     await tombstoneBox.put(syncId, serverId);
   }
@@ -48,22 +84,26 @@ class LocalDbService {
     return tombstoneBox.containsKey(syncId);
   }
 
-  // ─── Queuing Actions ──────────────────────────
+  // ─── Queue Management ─────────────────────────────────────────────────────
+
   static Future<void> _queueAction(
       String method, String endpoint, Map<String, dynamic>? payload) async {
+    final actionId = const Uuid().v4();
     final action = SyncAction(
-      id: const Uuid().v4(),
-      method: method,
-      endpoint: endpoint,
-      payload: payload != null ? jsonEncode(payload) : null,
-      timestamp: DateTime.now(),
+      id:               actionId,
+      method:           method,
+      endpoint:         endpoint,
+      payload:          payload != null ? jsonEncode(payload) : null,
+      timestamp:        DateTime.now(),
+      status:           SyncStatus.pending,
+      retryCount:       0,
+      idempotencyKey:   actionId,
     );
     await syncBox.put(action.id, action);
   }
 
-  /// Removes all pending queue actions for a given endpoint prefix.
-  /// Used when deleting an offline-created record (never synced) to clean
-  /// up its orphaned POST action.
+  /// Removes all pending queue actions referencing a given syncId UUID.
+  /// Used when deleting an offline-created record to clean up orphaned POSTs.
   static Future<void> _cancelQueuedActionsForSyncId(String syncId) async {
     final keysToDelete = <dynamic>[];
     for (final key in syncBox.keys) {
@@ -72,18 +112,14 @@ class LocalDbService {
       if (action.payload != null) {
         try {
           final map = jsonDecode(action.payload!) as Map<String, dynamic>;
-          if (map['sync_id'] == syncId) {
-            keysToDelete.add(key);
-            continue;
-          }
-          // Also match party_sync_id / entry_sync_id for child records
-          if (map['party_sync_id'] == syncId || map['entry_sync_id'] == syncId) {
+          if (map['sync_id'] == syncId ||
+              map['party_sync_id'] == syncId ||
+              map['entry_sync_id'] == syncId) {
             keysToDelete.add(key);
             continue;
           }
         } catch (_) {}
       }
-      // Match endpoint containing the syncId UUID directly
       if (action.endpoint.contains(syncId)) {
         keysToDelete.add(key);
       }
@@ -91,8 +127,19 @@ class LocalDbService {
     if (keysToDelete.isNotEmpty) await syncBox.deleteAll(keysToDelete);
   }
 
-  // ─── Parties ─────────────────────────────────
-  static List<Party> getParties() => partyBox.values.toList().reversed.toList();
+  /// Returns all queued actions that are still pending or failed (not abandoned).
+  /// Synced actions are deleted from the queue, so they never appear here.
+  static List<SyncAction> getPendingActions() {
+    return syncBox.values
+        .where((a) => !a.isAbandoned)
+        .toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  }
+
+  // ─── Parties ─────────────────────────────────────────────────────────────
+
+  static List<Party> getParties() =>
+      partyBox.values.toList().reversed.toList();
 
   static Future<void> saveParty(Party party, {bool isSync = false}) async {
     await partyBox.put(party.syncId, party);
@@ -107,43 +154,67 @@ class LocalDbService {
 
     final partyId = p.id;
 
-    // ─── Cascade: physically delete all related entries & items ───
-    if (partyId != null) {
-      final relatedEntries = entryBox.values.where((e) => e.party == partyId).toList();
-      for (final e in relatedEntries) {
-        final relatedItems = itemBox.values.where((i) => i.entry == (e.id ?? -1)).toList();
-        for (final i in relatedItems) {
-          await i.delete();
-        }
-        await e.delete();
+    // Cascade: delete all related entries and their items
+    final relatedEntries = entryBox.values.where((e) {
+      if (partyId != null && e.party == partyId) return true;
+      return false;
+    }).toList();
+
+    for (final e in relatedEntries) {
+      final entryLocalId = e.id;
+      final relatedItems = itemBox.values
+          .where((i) => entryLocalId != null && i.entry == entryLocalId)
+          .toList();
+      for (final i in relatedItems) {
+        await i.delete();
       }
+      if (e.syncId != null) await _cancelQueuedActionsForSyncId(e.syncId!);
+      await e.delete();
     }
 
-    // ─── Physically delete the party ───
     await partyBox.delete(syncId);
 
     if (!isSync) {
       final hasServerId = partyId != null && partyId > 0;
       if (hasServerId) {
-        // Party was synced to server — tombstone it and queue DELETE with real server ID
         await _addTombstone(syncId, partyId);
         await _queueAction('DELETE', 'parties/$partyId/', null);
       } else {
-        // Party was never synced — just cancel its pending POST (no server record exists)
         await _cancelQueuedActionsForSyncId(syncId);
-        // Still tombstone it so pull sync won't add it if somehow it gets to server
         await _addTombstone(syncId, 0);
       }
     }
   }
 
-  // ─── Entries ─────────────────────────────────
+  // ─── Entries ─────────────────────────────────────────────────────────────
+
   static List<Entry> getEntriesForParty(int partyId) {
     return entryBox.values
         .where((e) => e.party == partyId && e.status != 'DELETED')
         .toList()
         .reversed
         .toList();
+  }
+
+  static List<Entry> getAllActiveEntries() {
+    return entryBox.values
+        .where((e) => e.status == 'ACTIVE' || e.status == 'OVERDUE')
+        .toList()
+      ..sort((a, b) {
+        final dateA = DateTime.tryParse(a.date) ?? DateTime(1970);
+        final dateB = DateTime.tryParse(b.date) ?? DateTime(1970);
+        return dateB.compareTo(dateA);
+      });
+  }
+
+  static List<Entry> getRecentEntries({int limit = 5}) {
+    final all = entryBox.values.where((e) => e.status != 'DELETED').toList()
+      ..sort((a, b) {
+        final dateA = DateTime.tryParse(a.date) ?? DateTime(1970);
+        final dateB = DateTime.tryParse(b.date) ?? DateTime(1970);
+        return dateB.compareTo(dateA);
+      });
+    return all.take(limit).toList();
   }
 
   static List<Entry> searchEntries(String query) {
@@ -176,13 +247,13 @@ class LocalDbService {
     }
 
     return {
-      'total_parties': partyBox.values.length,
-      'total_entries': totalEntries,
-      'active': active,
-      'overdue': overdue,
-      'withdrawn': withdrawn,
-      'closed': closed,
-      'active_amount': activeAmount,
+      'total_parties':  partyBox.values.length,
+      'total_entries':  totalEntries,
+      'active':         active,
+      'overdue':        overdue,
+      'withdrawn':      withdrawn,
+      'closed':         closed,
+      'active_amount':  activeAmount,
       'overdue_amount': overdueAmount,
     };
   }
@@ -195,7 +266,17 @@ class LocalDbService {
       if (partySyncId != null) json['party_sync_id'] = partySyncId;
       final hasRealServerId = entry.id != null && entry.id! > 0;
       if (hasRealServerId) {
-        await _queueAction('PATCH', 'entries/${entry.id}/', json);
+        // Deduplicate: remove existing PATCH for same entry before adding new one
+        final endpoint = 'entries/${entry.id}/';
+        final keysToRemove = <dynamic>[];
+        for (final key in syncBox.keys) {
+          final action = syncBox.get(key);
+          if (action != null && action.method == 'PATCH' && action.endpoint == endpoint) {
+            keysToRemove.add(key);
+          }
+        }
+        if (keysToRemove.isNotEmpty) await syncBox.deleteAll(keysToRemove);
+        await _queueAction('PATCH', endpoint, json);
       } else {
         await _queueAction('POST', 'entries/', json);
       }
@@ -204,10 +285,12 @@ class LocalDbService {
 
   static Future<void> deleteEntry(Entry entry, {bool isSync = false}) async {
     final entryId = entry.id;
-    final syncId = entry.syncId;
+    final syncId  = entry.syncId;
 
-    // Physically delete all related items
-    final relatedItems = itemBox.values.where((i) => i.entry == (entryId ?? -1)).toList();
+    // Delete related items
+    final relatedItems = itemBox.values
+        .where((i) => i.entry == (entryId ?? -1))
+        .toList();
     for (final item in relatedItems) {
       await item.delete();
     }
@@ -227,23 +310,25 @@ class LocalDbService {
 
   static Future<void> withdrawEntry(Entry entry) async {
     final entryId = entry.id;
-    entry.status = 'WITHDRAWN';
+    entry.status   = 'WITHDRAWN';
     entry.closedAt = DateTime.now().toIso8601String().split('T')[0];
     await entryBox.put(entry.syncId, entry);
 
     if (entryId != null && entryId > 0) {
-      // Already synced — use real server ID in endpoint
       await _queueAction('POST', 'entries/$entryId/withdraw/', null);
     } else {
-      // Not yet synced — use syncId, SyncManager will resolve it
+      // Not yet synced — use syncId; SyncManager will resolve to real ID
       await _queueAction('POST', 'entries/${entry.syncId}/withdraw/', null);
     }
   }
 
-  // ─── Items ─────────────────────────────────
+  // ─── Items ────────────────────────────────────────────────────────────────
+
   static List<JewelleryItem> getItemsForEntry(int entryId) =>
       itemBox.values.where((i) => i.entry == entryId).toList();
 
+  /// Primary lookup by syncId — stable across the entire lifecycle.
+  /// Use this in preference to getItemsForEntry wherever possible.
   static List<JewelleryItem> getItemsForEntrySyncId(String entrySyncId) {
     final entry = entryBox.get(entrySyncId);
     if (entry == null) return [];

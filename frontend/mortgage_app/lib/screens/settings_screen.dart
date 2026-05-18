@@ -7,6 +7,7 @@ import '../services/sync_manager.dart';
 import '../models/business_setting.dart';
 import '../models/sync_action.dart';
 import 'login_screen.dart';
+import 'sync_diagnostics_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -68,6 +69,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _pinController.dispose();
     _gracePeriodController.dispose();
     super.dispose();
+  }
+
+  Widget _queueStat(String label, int count, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8, height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text('$count $label', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+      ],
+    );
   }
 
   Future<void> _saveSettings() async {
@@ -258,10 +273,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  // Sync queue status
+                  ValueListenableBuilder<int>(
+                    valueListenable: SyncManager().pendingCountNotifier,
+                    builder: (context, count, _) {
+                      final stats = SyncManager().getQueueStats();
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[200]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Sync Queue',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            const SizedBox(height: 8),
+                            Row(children: [
+                              _queueStat('Pending', stats['pending'] ?? 0, Colors.blue),
+                              const SizedBox(width: 12),
+                              _queueStat('Failed', stats['failed'] ?? 0, Colors.orange),
+                              const SizedBox(width: 12),
+                              _queueStat('Abandoned', stats['abandoned'] ?? 0, Colors.red),
+                            ]),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
                   OutlinedButton.icon(
                     onPressed: () => SyncManager().performFullSync(),
                     icon: const Icon(Icons.sync),
                     label: const Text('Force Sync Now'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SyncDiagnosticsScreen()),
+                    ),
+                    icon: const Icon(Icons.bug_report_outlined),
+                    label: const Text('Open Sync Diagnostics'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -287,8 +342,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           TextButton.icon(
             onPressed: () async {
+              // Proper logout: stop sync, close user boxes, clear credentials
+              SyncManager().dispose();
+              await LocalDbService.closeUserBoxes();
               await SettingsService.setToken(null);
               await SettingsService.setUsername(null);
+              LocalDbService.setUserNamespace('');
               if (mounted) {
                 Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(builder: (_) => const LoginScreen()),

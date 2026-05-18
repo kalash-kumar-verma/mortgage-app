@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────
+#  .dockerignore  —  Files excluded from Docker build context
+#  Keeps the image lean; excludes dev-only artifacts.
+# ─────────────────────────────────────────────────────────────────
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+backend/venv/
+
+# Secrets — NEVER include in image
+.env
+
+# Development database (container uses PostgreSQL or a fresh SQLite)
+db.sqlite3
+
+# User-uploaded media (mount as a volume in production)
+media/
+
+# Collected static files (built inside container)
+staticfiles/
+
+# Git
+.git/
+.gitignore
+
+# Flutter/Dart (not needed for Django image)
+frontend/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

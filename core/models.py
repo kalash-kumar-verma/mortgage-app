@@ -1,5 +1,6 @@
 from django.db import models
-from datetime import date
+from django.conf import settings
+from datetime import date, timedelta
 import uuid
 
 class BusinessSetting(models.Model):
@@ -18,6 +19,13 @@ class BusinessSetting(models.Model):
 
 
 class Party(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='parties',
+        null=True,  # nullable during migration; data migration sets existing records
+        blank=True,
+    )
     name = models.CharField(max_length=100)
     phone = models.CharField(max_length=15, blank=True)
     address = models.TextField(blank=True)
@@ -45,9 +53,11 @@ class Entry(models.Model):
     interest = models.DecimalField(max_digits=5, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ACTIVE')
     date = models.DateField(auto_now_add=True)
+    due_date = models.DateField(null=True, blank=True)  # Explicit due date; optional
     note = models.TextField(blank=True, default='')
     closed_at = models.DateField(null=True, blank=True)
     sync_id = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
+    version = models.IntegerField(default=1)  # Incremented on edit — used for conflict detection
 
     def save(self, *args, **kwargs):
         if not self.sr_number:
@@ -64,25 +74,26 @@ class Entry(models.Model):
     @property
     def total_payable(self):
         today = date.today()
+        # For closed/withdrawn entries, use the closure date
         if self.status in ['WITHDRAWN', 'CLOSED'] and self.closed_at:
             today = self.closed_at
-            
+        # For active entries, use due_date as the interest endpoint if it is past
+        elif self.due_date and self.due_date < today:
+            today = self.due_date
+
         days = (today - self.date).days
-        
-        settings = BusinessSetting.load()
-        
-        if settings.five_day_logic and days <= 5:
+
+        settings_obj = BusinessSetting.load()
+
+        if settings_obj.five_day_logic and days <= 5:
             interest_amount = 0
-        elif settings.strict_mode:
-            # Exact days logic: (amount * rate * 12 months) / 365 days * days
-            # Simplified for monthly rate: (amount * rate * days) / 3000
+        elif settings_obj.strict_mode:
             interest_amount = (float(self.amount) * float(self.interest) * days) / 3000
         else:
-            # Month based logic with grace period
-            if days <= settings.grace_period_days:
-                months = 1  # Minimum 1 month interest if not 5-day logic
+            if days <= settings_obj.grace_period_days:
+                months = 1
             else:
-                months = max(1, (days - settings.grace_period_days) // 30 + 1)
+                months = max(1, (days - settings_obj.grace_period_days) // 30 + 1)
             interest_amount = (float(self.amount) * float(self.interest) * months) / 100
 
         return round(float(self.amount) + interest_amount, 2)
@@ -93,6 +104,22 @@ class Entry(models.Model):
         if self.status in ['WITHDRAWN', 'CLOSED'] and self.closed_at:
             today = self.closed_at
         return (today - self.date).days
+
+    @property
+    def due_date_display(self):
+        """Human-readable due date string."""
+        if self.due_date:
+            return self.due_date.strftime('%d/%m/%Y')
+        return None
+
+    @property
+    def days_remaining(self):
+        """Days until due date. Negative = overdue. None if no due date."""
+        if not self.due_date:
+            return None
+        if self.status in ['WITHDRAWN', 'CLOSED']:
+            return None
+        return (self.due_date - date.today()).days
 
     def __str__(self):
         return f"{self.sr_number} - {self.party.name}"

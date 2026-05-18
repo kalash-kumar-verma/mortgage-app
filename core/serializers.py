@@ -11,12 +11,15 @@ class BusinessSettingSerializer(serializers.ModelSerializer):
 class PartySerializer(serializers.ModelSerializer):
     class Meta:
         model = Party
-        fields = '__all__'
+        # Exclude owner from the serialized output (it's an internal FK)
+        exclude = ['owner']
 
 
 class EntrySerializer(serializers.ModelSerializer):
     total_payable = serializers.ReadOnlyField()
     days_elapsed = serializers.ReadOnlyField()
+    due_date_display = serializers.ReadOnlyField()
+    days_remaining = serializers.ReadOnlyField()
     party_name = serializers.SerializerMethodField()
 
     def get_party_name(self, obj):

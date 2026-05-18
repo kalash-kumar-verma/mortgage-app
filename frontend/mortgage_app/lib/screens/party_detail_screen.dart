@@ -3,6 +3,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../models/party.dart';
 import '../models/entry.dart';
 import '../services/local_db_service.dart';
+import '../services/sync_manager.dart';
+import '../models/sync_action.dart';
 import 'add_entry_screen.dart';
 import 'entry_detail_screen.dart';
 
@@ -47,6 +49,37 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
       case 'CLOSED': return Colors.grey;
       default: return Colors.grey;
     }
+  }
+
+  Widget _emptyEntriesState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.receipt_long_outlined, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              'No entries yet',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[500],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap the + button below to record\nthe first mortgage entry for this customer.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.grey[400]),
+            ),
+            const SizedBox(height: 24),
+            const Icon(Icons.arrow_downward, color: Color(0xFF5C35D4), size: 28),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -132,12 +165,15 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                   children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: Text('Entries (${entries.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                      child: Text(
+                        'Entries (${entries.length})',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
                     ),
                     Expanded(
                       child: entries.isEmpty
-                        ? const Center(child: Text('No entries yet.\nTap + to add.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
-                        : ListView.builder(
+                          ? _emptyEntriesState()
+                          : ListView.builder(
                             itemCount: entries.length,
                             itemBuilder: (context, index) {
                               final e = entries[index];
@@ -161,19 +197,70 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                           style: TextStyle(fontSize: 11, color: _statusColor(e.status), fontWeight: FontWeight.w600),
                                         ),
                                       ),
-                                      if (e.id == null)
-                                        const Padding(
-                                          padding: EdgeInsets.only(left: 8),
-                                          child: Icon(Icons.cloud_upload_outlined, size: 14, color: Colors.orange),
-                                        ),
+                                      ValueListenableBuilder<int>(
+                                        valueListenable: SyncManager().pendingCountNotifier,
+                                        builder: (context, _, __) {
+                                          bool hasConflict = false;
+                                          bool hasPending = false;
+                                          if (e.id == null) hasPending = true;
+
+                                          for (final action in LocalDbService.syncBox.values) {
+                                            if (action.isAbandoned) continue;
+                                            if ((e.syncId != null && action.endpoint.contains(e.syncId!)) ||
+                                                (e.id != null && action.endpoint.contains(e.id.toString()))) {
+                                              if (action.status == SyncStatus.conflict) {
+                                                hasConflict = true;
+                                              } else {
+                                                hasPending = true;
+                                              }
+                                            }
+                                          }
+
+                                          if (hasConflict) {
+                                            return const Padding(
+                                              padding: EdgeInsets.only(left: 8),
+                                              child: Icon(Icons.error, size: 14, color: Colors.red),
+                                            );
+                                          }
+                                          if (hasPending) {
+                                            return const Padding(
+                                              padding: EdgeInsets.only(left: 8),
+                                              child: Icon(Icons.cloud_upload, size: 14, color: Colors.blue),
+                                            );
+                                          }
+                                          return const SizedBox.shrink();
+                                        },
+                                      ),
                                     ],
                                   ),
                                   subtitle: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text('₹${e.amount}  •  ${e.interest}% p.m.'),
-                                      Text('${e.daysElapsed} days  •  Payable: ₹${e.totalPayable.toStringAsFixed(0)}',
-                                          style: const TextStyle(fontSize: 12)),
+                                      Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              '${e.computedDaysElapsed} days  •  Payable: ₹${e.computedTotalPayable.toStringAsFixed(0)}',
+                                              style: const TextStyle(fontSize: 12),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (e.hasDueDate && e.daysRemainingLabel.isNotEmpty)
+                                        Text(
+                                          e.daysRemainingLabel,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: e.dueDateSeverity == 'red'
+                                                ? Colors.red
+                                                : e.dueDateSeverity == 'orange'
+                                                    ? Colors.orange
+                                                    : Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                   trailing: IconButton(

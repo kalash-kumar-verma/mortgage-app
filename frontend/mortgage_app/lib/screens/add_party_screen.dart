@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/party.dart';
 import '../services/local_db_service.dart';
-import '../services/api_service.dart';
 
 class AddPartyScreen extends StatefulWidget {
   const AddPartyScreen({super.key});

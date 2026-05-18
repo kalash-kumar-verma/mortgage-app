@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/entry.dart';
-import '../services/api_service.dart';
+import '../services/local_db_service.dart';
 
 class EditEntryScreen extends StatefulWidget {
   final Entry entry;
@@ -33,20 +33,9 @@ class _EditEntryScreenState extends State<EditEntryScreen> {
   }
 
   Future<void> _save() async {
-    if (widget.entry.id == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entry not synced yet.')));
-      return;
-    }
     setState(() => _loading = true);
     try {
-      await ApiService().updateEntry(
-        widget.entry.id!,
-        amount: _amountController.text,
-        interest: _interestController.text,
-        note: _noteController.text,
-      );
-      
-      // Construct updated entry to return
+      // Build updated entry, preserving all existing fields
       final updated = Entry(
         id: widget.entry.id,
         syncId: widget.entry.syncId,
@@ -54,14 +43,19 @@ class _EditEntryScreenState extends State<EditEntryScreen> {
         party: widget.entry.party,
         partyName: widget.entry.partyName,
         amount: _amountController.text,
-        interest: _interestController.text,
+        interest: _interestController.text.isEmpty ? '0' : _interestController.text,
         status: widget.entry.status,
-        totalPayable: widget.entry.totalPayable, // approximate until refresh
+        totalPayable: widget.entry.totalPayable,
         daysElapsed: widget.entry.daysElapsed,
         date: widget.entry.date,
         note: _noteController.text,
         closedAt: widget.entry.closedAt,
       );
+
+      // Offline-first: always save locally first.
+      // LocalDbService.saveEntry will queue a PATCH if entry has a real server ID,
+      // or update the pending POST payload if it's still unsynced.
+      await LocalDbService.saveEntry(updated);
 
       if (mounted) Navigator.pop(context, updated);
     } catch (e) {

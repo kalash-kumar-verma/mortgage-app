@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import '../services/api_service.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
 import '../models/party.dart';

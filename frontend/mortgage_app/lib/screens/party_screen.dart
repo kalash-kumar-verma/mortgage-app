@@ -104,7 +104,64 @@ class _PartyScreenState extends State<PartyScreen> {
                 }
 
                 if (parties.isEmpty) {
-                  return const Center(child: Text('No parties found. Tap + to add.', style: TextStyle(color: Colors.grey)));
+                  if (_searchQuery.isNotEmpty) {
+                    // No search results
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.search_off, size: 56, color: Colors.grey[300]),
+                          const SizedBox(height: 12),
+                          Text('No results for "$_searchQuery"',
+                              style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                            child: const Text('Clear search'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  // Completely empty — first use
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.people_outline, size: 72, color: Colors.grey[300]),
+                          const SizedBox(height: 20),
+                          Text(
+                            'No customers yet',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Add your first customer to start\ntracking jewellery mortgage entries.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 13, color: Colors.grey[400]),
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const AddPartyScreen()),
+                            ),
+                            icon: const Icon(Icons.add),
+                            label: const Text('Add First Customer'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
                 }
 
                 return ListView.builder(
