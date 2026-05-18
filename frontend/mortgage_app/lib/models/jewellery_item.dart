@@ -28,6 +28,9 @@ class JewelleryItem extends HiveObject {
   @HiveField(7)
   String? syncId;
 
+  @HiveField(8)
+  int version;
+
   JewelleryItem({
     this.id,
     required this.entry,
@@ -37,6 +40,7 @@ class JewelleryItem extends HiveObject {
     this.note = '',
     this.image,
     this.syncId,
+    this.version = 1,
   });
 
   factory JewelleryItem.fromJson(Map<String, dynamic> json) {
@@ -49,6 +53,7 @@ class JewelleryItem extends HiveObject {
       note: json['note'] ?? '',
       image: json['image'],
       syncId: json['sync_id'],
+      version: json['version'] ?? 1,
     );
   }
 
@@ -61,6 +66,7 @@ class JewelleryItem extends HiveObject {
       if (weight != null) 'weight': weight,
       'note': note,
       if (syncId != null) 'sync_id': syncId,
+      'version': version,
     };
   }
 }

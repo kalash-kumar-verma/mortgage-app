@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import User
 from django.db.models import Sum, Q
+from django.db import transaction
 
 from .models import Party, Entry, JewelleryItem, BusinessSetting, AuditLog
 from .serializers import (
@@ -69,6 +70,23 @@ class RegisterView(views.APIView):
         )
 
 
+class LogoutAllDevicesView(views.APIView):
+    """
+    POST /api/auth/logout_all/
+    Regenerates the user's token, immediately invalidating all other devices.
+    Returns the new token for the current device to stay logged in.
+    """
+    def post(self, request):
+        if not request.user.is_authenticated:
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+        
+        with transaction.atomic():
+            Token.objects.filter(user=request.user).delete()
+            new_token = Token.objects.create(user=request.user)
+            
+        return Response({'token': new_token.key, 'username': request.user.username})
+
+
 # ─── Business Settings ───────────────────────────────────────────────────────
 
 class BusinessSettingView(views.APIView):
@@ -84,6 +102,14 @@ class BusinessSettingView(views.APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         setting = BusinessSetting.load()
+        incoming_updated_at = request.data.get('updated_at')
+        if incoming_updated_at:
+            from django.utils.dateparse import parse_datetime
+            incoming_dt = parse_datetime(incoming_updated_at)
+            if incoming_dt and setting.updated_at and incoming_dt < setting.updated_at:
+                # Latest timestamp wins -> silently ignore older update
+                return Response(BusinessSettingSerializer(setting).data)
+
         serializer = BusinessSettingSerializer(setting, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -104,6 +130,7 @@ class PartyViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(name__icontains=search)
         return queryset
 
+    @transaction.atomic
     def perform_create(self, serializer):
         """Set the owner to the current user on creation."""
         serializer.save(owner=self.request.user)
@@ -140,14 +167,33 @@ class EntryViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         if not request.user.is_superuser:
             return Response(
                 {'error': 'Only owner can delete entries.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        
+        entry = self.get_object()
+        client_version_raw = request.query_params.get('version')
+        if client_version_raw is not None:
+            try:
+                client_version = int(client_version_raw)
+                if client_version < entry.version:
+                    return Response(
+                        {
+                            'conflict': True,
+                            'message': f"Version conflict: Entry was updated by another device. Review changes before deleting."
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+            except ValueError:
+                pass
+                
         return super().destroy(request, *args, **kwargs)
 
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
         """
         PATCH with optimistic version locking.
@@ -160,6 +206,15 @@ class EntryViewSet(viewsets.ModelViewSet):
         The Flutter app always sends 'version' in PATCH payloads (added to toJson()).
         """
         entry = self.get_object()  # already scoped to owner via get_queryset
+        
+        if entry.status == 'WITHDRAWN':
+            return Response(
+                {
+                    'conflict': True,
+                    'message': f"Entry {entry.sr_number} is already withdrawn/closed and cannot be edited.",
+                },
+                status=status.HTTP_409_CONFLICT
+            )
 
         client_version_raw = request.data.get('version')
         if client_version_raw is not None:
@@ -228,6 +283,7 @@ class EntryViewSet(viewsets.ModelViewSet):
             'overdue_amount': float(overdue_amount),
         })
 
+    @transaction.atomic
     @action(detail=True, methods=['post'])
     def withdraw(self, request, pk=None):
         from datetime import date as dt
@@ -255,6 +311,7 @@ class EntryViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(entry).data)
 
+    @transaction.atomic
     @action(detail=True, methods=['post'])
     def mark_overdue(self, request, pk=None):
         entry = self.get_object()
@@ -289,3 +346,52 @@ class JewelleryItemViewSet(viewsets.ModelViewSet):
         if entry_id:
             queryset = queryset.filter(entry_id=entry_id)
         return queryset
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        client_version_raw = request.query_params.get('version')
+        if client_version_raw is not None:
+            try:
+                client_version = int(client_version_raw)
+                if client_version < item.version:
+                    return Response(
+                        {
+                            'conflict': True,
+                            'message': f"Version conflict: Item was updated by another device. Review changes before deleting."
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+            except ValueError:
+                pass
+        return super().destroy(request, *args, **kwargs)
+
+    @transaction.atomic
+    def partial_update(self, request, *args, **kwargs):
+        item = self.get_object()
+
+        client_version_raw = request.data.get('version')
+        if client_version_raw is not None:
+            try:
+                client_version = int(client_version_raw)
+                if client_version < item.version:
+                    return Response(
+                        {
+                            'conflict':       True,
+                            'server_version': item.version,
+                            'client_version': client_version,
+                            'message': (
+                                f'Version conflict: '
+                                f'server is at version {item.version}, '
+                                f'your edit was based on version {client_version}.'
+                            ),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        serializer = self.get_serializer(item, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(version=item.version + 1)
+        return Response(serializer.data)

@@ -7,6 +7,7 @@ class BusinessSetting(models.Model):
     strict_mode = models.BooleanField(default=False)
     grace_period_days = models.IntegerField(default=5)
     five_day_logic = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -133,6 +134,7 @@ class JewelleryItem(models.Model):
     note = models.TextField(blank=True, default='')
     image = models.ImageField(upload_to='items/', null=True, blank=True)
     sync_id = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
+    version = models.IntegerField(default=1)
 
     def __str__(self):
         return f"{self.name} ({self.item_type})"

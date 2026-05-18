@@ -50,27 +50,33 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
   }
 
   Future<void> _handleConflict(SyncAction action) async {
+    final reason = action.failureReason ?? '';
+    final isParentDeleted = reason.contains('Parent deleted') || reason.contains('record deleted');
+    final isClosed = reason.contains('already closed');
+
     final serverVersionRegExp = RegExp(r'server is at version (\d+)');
-    final match = serverVersionRegExp.firstMatch(action.failureReason ?? '');
+    final match = serverVersionRegExp.firstMatch(reason);
     final serverVersionStr = match?.group(1);
     final serverVersion = serverVersionStr != null ? int.tryParse(serverVersionStr) : null;
 
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Version Conflict'),
+        title: Text(isParentDeleted ? 'Record Deleted' : (isClosed ? 'Record Closed' : 'Version Conflict')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Another device has edited this entry since you last synced.',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            Text(
+              isParentDeleted
+                  ? 'The parent record was deleted on the server.'
+                  : (isClosed ? 'This record is already withdrawn/closed and cannot be edited.' : 'Another device has edited this entry since you last synced.'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Text('Action: ${action.method} ${action.endpoint}'),
             const SizedBox(height: 8),
-            Text(action.failureReason ?? 'Version mismatch'),
+            Text(reason),
             const SizedBox(height: 16),
             const Text('How would you like to resolve this?'),
           ],
@@ -80,17 +86,29 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
+          if (isParentDeleted)
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.blue),
+              onPressed: () async {
+                // Restore parent: we re-queue the parent for creation if it exists locally
+                await _restoreParentAndRetry(action);
+                if (mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Restore Parent & Retry'),
+            ),
           TextButton(
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             onPressed: () async {
-              // Use server version -> discard local operation
+              // Discard child operation
               await LocalDbService.syncBox.delete(action.id);
-              Navigator.pop(ctx);
-              _forceSync(); // Pull latest state
+              if (mounted) {
+                Navigator.pop(ctx);
+                _forceSync();
+              }
             },
-            child: const Text('Use Server Version'),
+            child: Text(isParentDeleted || isClosed ? 'Discard Local Edit' : 'Use Server Version'),
           ),
-          if (serverVersion != null)
+          if (!isParentDeleted && !isClosed && serverVersion != null)
             ElevatedButton(
               onPressed: () async {
                 // Keep mine -> Update version in payload and retry
@@ -106,9 +124,11 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
                     _forceSync();
                   }
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error resolving conflict: $e')),
-                  );
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error resolving conflict: $e')),
+                    );
+                  }
                 }
               },
               child: const Text('Keep Mine (Overwrite Server)'),
@@ -117,6 +137,39 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
       ),
     );
     setState(() {}); // Refresh list
+  }
+
+  Future<void> _restoreParentAndRetry(SyncAction action) async {
+    // If it's an entry or item, we must find the parent and queue a POST.
+    // For simplicity, we can trigger a full local save for the parent which queues the POST.
+    try {
+      final payload = jsonDecode(action.payload ?? '{}') as Map<String, dynamic>;
+      
+      if (action.endpoint == 'entries/' || action.endpoint.startsWith('entries/')) {
+        // Parent is a Party
+        final partyIdStr = payload['party_sync_id'] ?? payload['party'];
+        if (partyIdStr != null) {
+          final p = LocalDbService.partyBox.values.firstWhere((p) => p.syncId == partyIdStr || p.id.toString() == partyIdStr.toString());
+          // Queue party POST
+          await LocalDbService.saveParty(p, isSync: false);
+        }
+      } else if (action.endpoint == 'items/' || action.endpoint.startsWith('items/')) {
+        // Parent is an Entry
+        final entryIdStr = payload['entry_sync_id'] ?? payload['entry'];
+        if (entryIdStr != null) {
+          final e = LocalDbService.entryBox.values.firstWhere((e) => e.syncId == entryIdStr || e.id.toString() == entryIdStr.toString());
+          await LocalDbService.saveEntry(e, isSync: false, partySyncId: e.party.toString());
+        }
+      }
+      
+      // Now set the child action back to pending
+      action.status = SyncStatus.pending;
+      action.failureReason = null;
+      await action.save();
+      _forceSync();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not restore parent: $e')));
+    }
   }
 
   String _timeAgo(DateTime dt) {

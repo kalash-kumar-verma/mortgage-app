@@ -102,7 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fiveDayLogic: _fiveDayLogic,
           gracePeriodDays: int.tryParse(_gracePeriodController.text) ?? 5,
         );
-        await ApiService().updateBusinessSettings(newSetting);
+        await LocalDbService.saveBusinessSetting(newSetting);
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save business settings: $e')));
@@ -357,6 +357,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
             icon: const Icon(Icons.logout, color: Colors.red),
             label: const Text('Logout', style: TextStyle(color: Colors.red)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
+          const Divider(),
+          TextButton.icon(
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('Logout All Devices'),
+                  content: const Text('This will log out all other devices immediately.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Logout All', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm != true) return;
+              try {
+                await ApiService().logoutAllDevices();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('All other devices logged out.')));
+                }
+              } catch (e) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+              }
+            },
+            icon: const Icon(Icons.phonelink_erase, color: Colors.red),
+            label: const Text('Logout from all other devices', style: TextStyle(color: Colors.red)),
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
             ),

@@ -184,7 +184,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                   },
                                   title: Row(
                                     children: [
-                                      Text(e.srNumber, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                      Text((e.id == null || e.id! < 0) ? 'SR: Pending ⟳' : e.srNumber, style: const TextStyle(fontWeight: FontWeight.bold)),
                                       const SizedBox(width: 8),
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

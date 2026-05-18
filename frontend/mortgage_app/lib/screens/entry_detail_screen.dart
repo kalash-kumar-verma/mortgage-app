@@ -119,7 +119,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_entry.srNumber),
+        title: Text((_entry.id == null || _entry.id! < 0) ? 'SR: Pending ⟳' : _entry.srNumber),
         actions: [
           if (_canEdit)
             IconButton(

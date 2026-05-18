@@ -222,11 +222,11 @@ class SyncManager {
         await box.delete(action.id);
         debugPrint('[SyncManager] ✓ ${action.method} ${action.endpoint}');
       } catch (e) {
-        if (e is FormatException && e.message.startsWith('CONFLICT_409:')) {
+        if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:'))) {
           action.status        = SyncStatus.conflict;
           action.isSyncing     = false;
           // Note: we do NOT increment retryCount on conflict
-          action.failureReason = e.message.substring('CONFLICT_409:'.length);
+          action.failureReason = e.message.contains(':') ? e.message.split(':').last : 'Conflict detected';
           await action.save();
           debugPrint('[SyncManager] ✗ Conflict on ${action.endpoint}: ${action.failureReason}');
         } else {
@@ -355,6 +355,19 @@ class SyncManager {
          if (body['message'] != null) errMsg = body['message'].toString();
       } catch (_) {}
       throw FormatException('CONFLICT_409:$errMsg');
+    }
+
+    if (response.statusCode == 404 && action.method == 'PATCH') {
+      throw const FormatException('CONFLICT_404:Parent or record deleted on server.');
+    }
+
+    if (response.statusCode == 400 && action.method == 'POST') {
+      try {
+         final body = jsonDecode(response.body) as Map<String, dynamic>;
+         if (body.values.any((v) => v.toString().contains('object does not exist'))) {
+           throw const FormatException('CONFLICT_404:Parent deleted on server.');
+         }
+      } catch (_) {}
     }
 
     // 404 on DELETE = already deleted on server → treat as success

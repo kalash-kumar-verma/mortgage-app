@@ -308,7 +308,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     Row(
                       children: [
-                        Text(e.srNumber,
+                        Text((e.id == null || e.id! < 0) ? 'SR: Pending ⟳' : e.srNumber,
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold, fontSize: 13)),
                         const SizedBox(width: 8),

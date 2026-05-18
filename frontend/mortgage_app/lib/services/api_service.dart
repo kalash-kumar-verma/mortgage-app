@@ -18,6 +18,17 @@ class ApiService {
     return headers;
   }
 
+  // ─── Auth ───────────────────────────────────────────────────
+  Future<void> logoutAllDevices() async {
+    final response = await http.post(Uri.parse('$baseUrl/auth/logout_all/'), headers: _headers);
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      await SettingsService.setToken(data['token']);
+    } else {
+      throw Exception('Failed to logout all devices');
+    }
+  }
+
   // ─── Business Settings ──────────────────────────────────────
   Future<BusinessSetting> fetchBusinessSettings() async {
     final response = await http.get(Uri.parse('$baseUrl/settings/'), headers: _headers);

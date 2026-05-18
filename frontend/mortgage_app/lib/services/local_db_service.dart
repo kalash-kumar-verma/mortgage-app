@@ -300,7 +300,7 @@ class LocalDbService {
       final hasServerId = entryId != null && entryId > 0;
       if (hasServerId) {
         await _addTombstone(syncId, entryId);
-        await _queueAction('DELETE', 'entries/$entryId/', null);
+        await _queueAction('DELETE', 'entries/$entryId/?version=${entry.version}', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
         await _addTombstone(syncId, 0);
@@ -351,10 +351,16 @@ class LocalDbService {
     await item.delete();
     if (!isSync && syncId != null) {
       if (itemId != null && itemId > 0) {
-        await _queueAction('DELETE', 'items/$itemId/', null);
+        await _queueAction('DELETE', 'items/$itemId/?version=${item.version}', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
       }
+    }
+  }
+
+  static Future<void> saveBusinessSetting(dynamic setting, {bool isSync = false}) async {
+    if (!isSync) {
+      await _queueAction('PUT', 'settings/', setting.toJson());
     }
   }
 }

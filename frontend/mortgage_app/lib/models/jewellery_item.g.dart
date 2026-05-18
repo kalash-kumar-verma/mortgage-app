@@ -25,13 +25,14 @@ class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
       note: fields[5] as String,
       image: fields[6] as String?,
       syncId: fields[7] as String?,
+      version: fields[8] == null ? 1 : fields[8] as int,
     );
   }
 
   @override
   void write(BinaryWriter writer, JewelleryItem obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -47,7 +48,9 @@ class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
       ..writeByte(6)
       ..write(obj.image)
       ..writeByte(7)
-      ..write(obj.syncId);
+      ..write(obj.syncId)
+      ..writeByte(8)
+      ..write(obj.version);
   }
 
   @override
