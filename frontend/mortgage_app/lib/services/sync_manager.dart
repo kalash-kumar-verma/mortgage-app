@@ -478,56 +478,149 @@ class SyncManager {
 
   // ─── Pull Sync ────────────────────────────────────────────────────────────
 
-  /// Pull new records from server into local Hive store.
+  /// Full reconciliation pull from server.
   ///
-  /// Rules:
-  ///   - ADDITIVE ONLY — never overwrites existing local records
-  ///   - Tombstoned records (locally deleted) are never resurrected
-  ///   - Gracefully handles server downtime (logs, uses cached data)
+  /// Per-record rules:
+  ///   - Server has record, local MISSING → INSERT (new on another device)
+  ///   - Server has record, local EXISTS  → UPDATE fields if server version is newer
+  ///   - Server MISSING record, local EXISTS, locally tombstoned → skip (we deleted it)
+  ///   - Server MISSING record, local EXISTS, pending queue op → skip (our own unsynced create)
+  ///   - Server MISSING record, local EXISTS, no pending op → DELETE locally (another device deleted it)
   Future<void> _smartPullSync() async {
     try {
+      // Build set of syncIds that have pending queue ops — don't delete unsynced local records
+      final pendingSyncIds = <String>{};
+      for (final action in LocalDbService.syncBox.values) {
+        if (action.isAbandoned) continue;
+        if (action.payload != null) {
+          try {
+            final m = jsonDecode(action.payload!) as Map<String, dynamic>;
+            for (final key in ['sync_id', 'party_sync_id', 'entry_sync_id']) {
+              final v = m[key];
+              if (v != null) pendingSyncIds.add(v.toString());
+            }
+          } catch (_) {}
+        }
+        final uuidRx = RegExp(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
+        final match = uuidRx.firstMatch(action.endpoint);
+        if (match != null) pendingSyncIds.add(match.group(0)!);
+      }
+
       final serverParties = await ApiService().fetchParties();
+      final serverPartySyncIds = <String>{};
 
       for (final serverParty in serverParties) {
         serverParty.syncId ??= 'server-${serverParty.id}';
+        serverPartySyncIds.add(serverParty.syncId!);
 
-        if (LocalDbService.isTombstoned(serverParty.syncId)) continue;
+        if (LocalDbService.isTombstoned(serverParty.syncId!)) continue;
 
         final localParty = LocalDbService.partyBox.get(serverParty.syncId);
         if (localParty == null) {
           await LocalDbService.saveParty(serverParty, isSync: true);
+        } else {
+          bool dirty = false;
+          if (localParty.name != serverParty.name)       { localParty.name = serverParty.name; dirty = true; }
+          if (localParty.phone != serverParty.phone)     { localParty.phone = serverParty.phone; dirty = true; }
+          if (localParty.address != serverParty.address) { localParty.address = serverParty.address; dirty = true; }
+          if (serverParty.id != null && localParty.id != serverParty.id) { localParty.id = serverParty.id; dirty = true; }
+          if (dirty) await localParty.save();
         }
 
         if (serverParty.id == null) continue;
         final serverEntries = await ApiService().fetchEntries(serverParty.id!);
+        final serverEntrySyncIds = <String>{};
 
         for (final serverEntry in serverEntries) {
           serverEntry.syncId ??= 'server-${serverEntry.id}';
+          serverEntrySyncIds.add(serverEntry.syncId!);
 
-          if (LocalDbService.isTombstoned(serverEntry.syncId)) continue;
+          if (LocalDbService.isTombstoned(serverEntry.syncId!)) continue;
 
           final localEntry = LocalDbService.entryBox.get(serverEntry.syncId);
           if (localEntry == null) {
             await LocalDbService.saveEntry(serverEntry, isSync: true);
+          } else {
+            bool dirty = false;
+            if (serverEntry.id != null && localEntry.id != serverEntry.id) { localEntry.id = serverEntry.id; dirty = true; }
+            if (localEntry.status != serverEntry.status)                   { localEntry.status = serverEntry.status; dirty = true; }
+            if (localEntry.version < serverEntry.version)                  { localEntry.version = serverEntry.version; dirty = true; }
+            if (localEntry.closedAt != serverEntry.closedAt)              { localEntry.closedAt = serverEntry.closedAt; dirty = true; }
+            if (localEntry.amount != serverEntry.amount)                   { localEntry.amount = serverEntry.amount; dirty = true; }
+            if (localEntry.interest != serverEntry.interest)               { localEntry.interest = serverEntry.interest; dirty = true; }
+            if (serverEntry.srNumber.isNotEmpty && localEntry.srNumber != serverEntry.srNumber) {
+              localEntry.srNumber = serverEntry.srNumber; dirty = true;
+            }
+            if (dirty) await localEntry.save();
           }
 
           if (serverEntry.id == null) continue;
           final serverItems = await ApiService().fetchItems(serverEntry.id!);
+          final serverItemSyncIds = <String>{};
 
           for (final serverItem in serverItems) {
             serverItem.syncId ??= 'server-${serverItem.id}';
-            if (LocalDbService.isTombstoned(serverItem.syncId)) continue;
+            serverItemSyncIds.add(serverItem.syncId!);
+            if (LocalDbService.isTombstoned(serverItem.syncId!)) continue;
             final localItem = LocalDbService.itemBox.get(serverItem.syncId);
             if (localItem == null) {
               await LocalDbService.saveItem(serverItem, isSync: true);
+            } else {
+              bool dirty = false;
+              if (serverItem.id != null && localItem.id != serverItem.id) { localItem.id = serverItem.id; dirty = true; }
+              if (localItem.version < serverItem.version)                 { localItem.version = serverItem.version; dirty = true; }
+              if (localItem.name != serverItem.name)                      { localItem.name = serverItem.name; dirty = true; }
+              if (localItem.note != serverItem.note)                      { localItem.note = serverItem.note; dirty = true; }
+              if (dirty) await localItem.save();
             }
           }
+
+          // Remove local items deleted on server
+          final entryLocalId = LocalDbService.entryBox.get(serverEntry.syncId!)?.id ?? serverEntry.id ?? -1;
+          for (final localItem in LocalDbService.itemBox.values.where((i) => i.entry == entryLocalId).toList()) {
+            final itemSyncId = localItem.syncId ?? '';
+            if (serverItemSyncIds.contains(itemSyncId)) continue;
+            if (LocalDbService.isTombstoned(itemSyncId)) continue;
+            if (pendingSyncIds.contains(itemSyncId)) continue;
+            debugPrint('[SyncManager] Reconcile: removing item $itemSyncId (deleted on server)');
+            await localItem.delete();
+          }
+        }
+
+        // Remove local entries deleted on server
+        final partyLocalId = LocalDbService.partyBox.get(serverParty.syncId!)?.id ?? serverParty.id ?? -1;
+        for (final localEntry in LocalDbService.entryBox.values.where((e) => e.party == partyLocalId).toList()) {
+          final entrySyncId = localEntry.syncId ?? '';
+          if (serverEntrySyncIds.contains(entrySyncId)) continue;
+          if (LocalDbService.isTombstoned(entrySyncId)) continue;
+          if (pendingSyncIds.contains(entrySyncId)) continue;
+          debugPrint('[SyncManager] Reconcile: removing entry $entrySyncId (deleted on server)');
+          for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (localEntry.id ?? -1)).toList()) {
+            await item.delete();
+          }
+          await localEntry.delete();
         }
       }
-      
-      // If we got here without exception, pull was completely successful
+
+      // Remove local parties deleted on server
+      for (final localParty in LocalDbService.partyBox.values.toList()) {
+        final partySyncId = localParty.syncId ?? '';
+        if (serverPartySyncIds.contains(partySyncId)) continue;
+        if (LocalDbService.isTombstoned(partySyncId)) continue;
+        if (pendingSyncIds.contains(partySyncId)) continue;
+        debugPrint('[SyncManager] Reconcile: removing party $partySyncId (deleted on server)');
+        for (final entry in LocalDbService.entryBox.values.where((e) => e.party == (localParty.id ?? -1)).toList()) {
+          for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (entry.id ?? -1)).toList()) {
+            await item.delete();
+          }
+          await entry.delete();
+        }
+        await LocalDbService.partyBox.delete(partySyncId);
+      }
+
       await SettingsService.setLastSyncedAt(DateTime.now());
-      
+      debugPrint('[SyncManager] Pull reconcile complete.');
+
     } catch (e) {
       debugPrint('[SyncManager] Pull sync failed: $e — using cached local data.');
     }

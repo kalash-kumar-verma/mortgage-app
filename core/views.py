@@ -169,11 +169,6 @@ class EntryViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
-            return Response(
-                {'error': 'Only owner can delete entries.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         
         entry = self.get_object()
         client_version_raw = request.query_params.get('version')
