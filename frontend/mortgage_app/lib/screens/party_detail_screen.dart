@@ -33,8 +33,7 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
     );
     if (confirm != true) return;
     try {
-      e.status = 'DELETED';
-      await LocalDbService.saveEntry(e);
+      await LocalDbService.deleteEntry(e);
     } catch (err) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err.toString())));
     }

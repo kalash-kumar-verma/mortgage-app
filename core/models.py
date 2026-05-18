@@ -39,7 +39,7 @@ class Entry(models.Model):
         ('DELETED', 'Deleted'),
     ]
 
-    sr_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
+    sr_number = models.CharField(max_length=20, blank=True, null=True)
     party = models.ForeignKey(Party, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     interest = models.DecimalField(max_digits=5, decimal_places=2)
@@ -51,9 +51,14 @@ class Entry(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.sr_number:
-            last_entry = Entry.objects.order_by('-id').first()
-            next_num = (last_entry.id + 1) if last_entry else 1
-            self.sr_number = f"SR-{1000 + next_num}"
+            max_num = 0
+            for e in Entry.objects.all():
+                try:
+                    num = int(''.join(filter(str.isdigit, str(e.sr_number))))
+                    if num > max_num: max_num = num
+                except ValueError:
+                    pass
+            self.sr_number = f"SR no: {max_num + 1}"
         super().save(*args, **kwargs)
 
     @property

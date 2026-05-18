@@ -218,7 +218,7 @@ class ApiService {
     throw Exception('Failed to load items');
   }
 
-  Future<void> createItem({
+  Future<JewelleryItem> createItem({
     required int entry,
     required String itemType,
     required String name,
@@ -251,7 +251,9 @@ class ApiService {
     final streamedResponse = await request.send();
     final response = await http.Response.fromStream(streamedResponse);
     
-    if (response.statusCode != 201) {
+    if (response.statusCode == 201) {
+      return JewelleryItem.fromJson(jsonDecode(response.body));
+    } else {
       throw Exception('Item create failed (${response.statusCode}): ${response.body}');
     }
   }

@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../services/settings_service.dart';
 import '../services/sync_manager.dart';
 import '../main.dart';
+import 'settings_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -38,10 +39,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await SettingsService.setToken(token);
         await SettingsService.setUsername(_usernameController.text);
         
-        // After login, we must restart sync to use new token
+        // After login: push any pending local changes first, then pull server data
         final syncManager = SyncManager();
         syncManager.initialize();
-        await syncManager.performFullPullSync(); // Initial fetch
+        syncManager.performFullSync(); // fire-and-forget — don't block navigation
         
         if (mounted) {
           Navigator.pushReplacement(
@@ -69,10 +70,26 @@ class _LoginScreenState extends State<LoginScreen> {
             end: Alignment.bottomRight,
           ),
         ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Card(
+        child: SafeArea(
+          child: Stack(
+            children: [
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.settings, color: Colors.white),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    );
+                  },
+                ),
+              ),
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Card(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
               elevation: 12,
               child: Padding(
@@ -138,6 +155,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
             ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

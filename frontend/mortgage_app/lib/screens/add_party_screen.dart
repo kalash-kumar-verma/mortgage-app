@@ -38,39 +38,27 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
 
     setState(() => _loading = true);
 
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = !connectivity.contains(ConnectivityResult.none);
-
     try {
-      if (isOnline) {
-        // ── Online: Create via API to get a real ID immediately ──
-        final response = await ApiService().createPartyAndReturn(
-          name: _nameController.text,
-          phone: _phoneController.text,
-          address: _addressController.text,
-          note: _noteController.text,
-          defaultInterestRate: _interestController.text.isNotEmpty ? _interestController.text : null,
-        );
-        response.syncId = 'server-${response.id}';
-        await LocalDbService.saveParty(response, isSync: true);
-      } else {
-        // ── Offline: Save locally as pending ──
-        final p = Party(
-          syncId: const Uuid().v4(),
-          name: _nameController.text,
-          phone: _phoneController.text,
-          address: _addressController.text,
-          note: _noteController.text,
-          defaultInterestRate: _interestController.text.isNotEmpty ? double.tryParse(_interestController.text) : null,
-        );
-        await LocalDbService.saveParty(p);
-      }
+      final uniqueNegativeId = -(DateTime.now().millisecondsSinceEpoch % 1000000000);
+      final p = Party(
+        id: uniqueNegativeId,
+        syncId: const Uuid().v4(),
+        name: _nameController.text,
+        phone: _phoneController.text,
+        address: _addressController.text,
+        note: _noteController.text,
+        defaultInterestRate: _interestController.text.isNotEmpty ? double.tryParse(_interestController.text) : null,
+      );
+      
+      // Instantly save to local database (this will also queue the sync operation)
+      await LocalDbService.saveParty(p);
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    if (mounted) setState(() => _loading = false);
   }
 
   @override

@@ -41,12 +41,6 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
   }
 
   Future<void> _save() async {
-    if (widget.party.id == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This party is not synced to the server yet. Please connect to the internet first.')),
-      );
-      return;
-    }
     if (_amountController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Amount is required')));
       return;
@@ -54,46 +48,45 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
 
     setState(() => _loading = true);
 
-    // Check connectivity — prefer online creation so we get a real ID immediately
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = !connectivity.contains(ConnectivityResult.none);
-
     try {
-      if (isOnline) {
-        // ── Online: Create via API, get real id + sr_number back, store in Hive ──
-        final response = await ApiService().createEntryAndReturn(
-          party: widget.party.id!,
-          amount: _amountController.text,
-          interest: _interestController.text.isEmpty ? '0' : _interestController.text,
-          note: _noteController.text,
-        );
-        response.syncId = const Uuid().v4();
-        await LocalDbService.saveEntry(response, isSync: true);
-      } else {
-        // ── Offline: Save locally as pending ──
-        final e = Entry(
-          syncId: const Uuid().v4(),
-          srNumber: 'Pending...',
-          party: widget.party.id!,
-          amount: _amountController.text,
-          interest: _interestController.text.isEmpty ? '0' : _interestController.text,
-          status: 'ACTIVE',
-          date: DateTime.now().toIso8601String().split('T')[0],
-          totalPayable: double.tryParse(_amountController.text) ?? 0.0,
-          daysElapsed: 0,
-          partyName: widget.party.name,
-          note: _noteController.text,
-        );
-        await LocalDbService.saveEntry(e);
+      // Calculate the next sequential SR number based on existing local entries
+      int maxSr = 0;
+      for (var entry in LocalDbService.entryBox.values) {
+        // Extract digits in case there's a prefix, but user wants plain numbers like 1, 2, 3
+        final strVal = entry.srNumber.replaceAll(RegExp(r'[^0-9]'), '');
+        final num = int.tryParse(strVal) ?? 0;
+        if (num > maxSr) maxSr = num;
       }
-
+      final localSr = 'SR no: ${maxSr + 1}';
+      final uniqueNegativeId = -(DateTime.now().millisecondsSinceEpoch % 1000000000);
+      final e = Entry(
+        id: uniqueNegativeId,
+        syncId: const Uuid().v4(),
+        srNumber: localSr,
+        party: widget.party.id ?? -1,
+        amount: _amountController.text,
+        interest: _interestController.text.isEmpty ? '0' : _interestController.text,
+        status: 'ACTIVE',
+        date: DateTime.now().toIso8601String().split('T')[0],
+        totalPayable: double.tryParse(_amountController.text) ?? 0.0,
+        daysElapsed: 0,
+        partyName: widget.party.name,
+        note: _noteController.text,
+      );
+      
+      // Instantly save to local database (this will also queue the sync operation)
+      // Pass the party's syncId so SyncManager can resolve the parent if it's also pending.
+      await LocalDbService.saveEntry(e, partySyncId: widget.party.syncId);
+      
       if (mounted) Navigator.pop(context, true);
+
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    if (mounted) setState(() => _loading = false);
   }
 
   @override

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/settings_service.dart';
+import '../services/local_db_service.dart';
+import '../services/sync_manager.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -18,16 +21,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _load();
+    SyncManager().isSyncingNotifier.addListener(_onSyncStatusChanged);
+  }
+
+  @override
+  void dispose() {
+    SyncManager().isSyncingNotifier.removeListener(_onSyncStatusChanged);
+    super.dispose();
+  }
+
+  void _onSyncStatusChanged() {
+    // Reload dashboard silently if sync just completed
+    if (!SyncManager().isSyncingNotifier.value) {
+      _loadSilently();
+    }
+  }
+
+  Future<void> _loadSilently() async {
+    if (mounted) {
+      final localStats = LocalDbService.computeStats();
+      setState(() => _stats = localStats);
+    }
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final stats = await ApiService().fetchStats();
-      setState(() { _stats = stats; _loading = false; });
-    } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
-    }
+    setState(() { _loading = true; });
+    
+    // Local DB is the single source of truth for the dashboard.
+    // It instantly reflects both online and offline changes.
+    final localStats = LocalDbService.computeStats();
+    if (mounted) setState(() { _stats = localStats; _loading = false; });
+
+    // Ask SyncManager to fetch new records from server in the background.
+    // When it finishes, it notifies listeners and we update stats.
+    SyncManager().performFullSync();
   }
 
   Widget _statCard({
@@ -71,7 +98,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
-      body: _loading
+      body: Column(
+        children: [
+          ValueListenableBuilder<bool>(
+            valueListenable: SyncManager().isSyncingNotifier,
+            builder: (context, isSyncing, child) {
+              if (!isSyncing) return const SizedBox.shrink();
+              return Container(
+                color: Colors.blue.withOpacity(0.1),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 12),
+                    Text('Syncing offline data...', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              );
+            },
+          ),
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(
@@ -166,6 +214,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
+          ),
+        ],
+      ),
     );
   }
 }

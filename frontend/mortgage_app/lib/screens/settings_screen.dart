@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
 import '../services/settings_service.dart';
 import '../services/api_service.dart';
+import '../services/local_db_service.dart';
+import '../services/sync_manager.dart';
 import '../models/business_setting.dart';
+import '../models/sync_action.dart';
 import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -31,9 +35,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadBackendSettings();
   }
 
+  bool _settingsOffline = false;
+
   Future<void> _loadBackendSettings() async {
     try {
-      final setting = await ApiService().fetchBusinessSettings();
+      final setting = await ApiService().fetchBusinessSettings()
+          .timeout(const Duration(seconds: 5));
       if (mounted) {
         setState(() {
           _businessSetting = setting;
@@ -41,12 +48,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _fiveDayLogic = setting.fiveDayLogic;
           _gracePeriodController.text = setting.gracePeriodDays.toString();
           _loading = false;
+          _settingsOffline = false;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _loading = false);
-        // Silently fail if backend is unreachable, just show UI.
+        setState(() {
+          _loading = false;
+          _settingsOffline = true; // Show offline notice in UI
+        });
       }
     }
   }
@@ -93,6 +103,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _clearSyncQueue() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Clear Pending Sync Queue'),
+        content: const Text(
+          'This will permanently delete all pending offline changes that have not been synced to the server.\n\n'
+          'Use this only if you want to discard old queued actions. Recent offline data in your app will NOT be deleted.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear Queue', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final box = Hive.box<SyncAction>(LocalDbService.syncBoxName);
+    await box.clear();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sync queue cleared. Fresh actions will sync normally.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -103,6 +141,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Interest Business Rules (Backend)
           if (_loading)
             const Center(child: CircularProgressIndicator())
+          else if (_settingsOffline)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    const Icon(Icons.cloud_off, size: 40, color: Colors.grey),
+                    const SizedBox(height: 8),
+                    const Text('Business Rules unavailable offline', style: TextStyle(color: Colors.grey)),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        setState(() { _loading = true; _settingsOffline = false; });
+                        _loadBackendSettings();
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           else if (_businessSetting != null)
             Card(
               child: Padding(
@@ -196,6 +256,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       labelText: 'API Base URL',
                       helperText: 'e.g., http://192.168.1.100:8000/api',
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: () => SyncManager().performFullSync(),
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Force Sync Now'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                    onPressed: _clearSyncQueue,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Clear Pending Sync Queue'),
                   ),
                 ],
               ),

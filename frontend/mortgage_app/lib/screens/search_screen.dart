@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/entry.dart';
 import '../services/api_service.dart';
+import '../services/local_db_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'entry_detail_screen.dart';
 
 class SearchScreen extends StatefulWidget {
@@ -29,11 +31,25 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     setState(() { _loading = true; _error = null; });
+
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity.contains(ConnectivityResult.none)) {
+      if (mounted) {
+        final localList = LocalDbService.searchEntries(_searchController.text);
+        setState(() { _results = localList; _loading = false; });
+      }
+      return;
+    }
+
     try {
-      final list = await ApiService().fetchAllEntries(search: _searchController.text);
-      setState(() { _results = list; _loading = false; });
+      final list = await ApiService().fetchAllEntries(search: _searchController.text).timeout(const Duration(seconds: 3));
+      if (mounted) setState(() { _results = list; _loading = false; });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      if (mounted) {
+        // Fallback to local search if offline or timed out
+        final localList = LocalDbService.searchEntries(_searchController.text);
+        setState(() { _results = localList; _loading = false; });
+      }
     }
   }
 

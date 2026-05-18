@@ -10,6 +10,7 @@ import 'services/settings_service.dart';
 
 import 'services/local_db_service.dart';
 import 'services/sync_manager.dart';
+import 'models/sync_action.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,7 @@ void main() async {
   await Hive.openBox('settings');
   
   await LocalDbService.init();
+
   SyncManager().initialize();
 
   runApp(const MortgageApp());

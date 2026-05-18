@@ -20,8 +20,8 @@ class _PartyScreenState extends State<PartyScreen> {
   @override
   void initState() {
     super.initState();
-    // Fetch latest from server in background
-    SyncManager().performFullPullSync();
+    // Push any pending local changes to server, then refresh in background
+    SyncManager().performFullSync();
   }
 
   @override

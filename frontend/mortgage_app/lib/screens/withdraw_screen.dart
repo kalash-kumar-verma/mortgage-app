@@ -41,39 +41,14 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
       return;
     }
     try {
-      final connectivity = await Connectivity().checkConnectivity();
-      final isOnline = !connectivity.contains(ConnectivityResult.none);
-      
-      Entry updatedEntry;
-
-      if (isOnline) {
-        // ── Online: Call API, get updated entry, save to Hive ──
-        updatedEntry = await ApiService().withdrawEntry(widget.entry.id!);
-        await LocalDbService.saveEntry(updatedEntry, isSync: true);
-      } else {
-        // ── Offline: Update locally, queue sync ──
-        updatedEntry = widget.entry;
-        updatedEntry.status = 'WITHDRAWN';
-        updatedEntry.closedAt = DateTime.now().toIso8601String().split('T')[0];
-        
-        // Save locally
-        await LocalDbService.saveEntry(updatedEntry);
-        
-        // Queue sync action
-        final box = Hive.box<SyncAction>(LocalDbService.syncBoxName);
-        await box.add(SyncAction(
-          id: const Uuid().v4(),
-          endpoint: 'entries/${widget.entry.id}/withdraw/',
-          method: 'POST',
-          payload: '{}',
-          timestamp: DateTime.now(),
-        ));
-      }
+      // Offline-first approach: Instantly update locally and queue the action.
+      // SyncManager will handle the server communication in the background.
+      await LocalDbService.withdrawEntry(widget.entry);
 
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => ReceiptScreen(entry: updatedEntry)),
+          MaterialPageRoute(builder: (_) => ReceiptScreen(entry: widget.entry)),
         );
       }
     } catch (e) {

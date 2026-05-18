@@ -2,10 +2,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_service.dart';
+import '../services/local_db_service.dart';
+import '../models/entry.dart';
+import '../models/jewellery_item.dart';
+import 'package:uuid/uuid.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class AddItemScreen extends StatefulWidget {
-  final int entryId;
-  const AddItemScreen({super.key, required this.entryId});
+  final Entry entry;
+  const AddItemScreen({super.key, required this.entry});
 
   @override
   State<AddItemScreen> createState() => _AddItemScreenState();
@@ -60,19 +65,29 @@ class _AddItemScreenState extends State<AddItemScreen> {
 
     setState(() => _loading = true);
     try {
-      await ApiService().createItem(
-        entry: widget.entryId,
+      final uniqueNegativeId = -(DateTime.now().millisecondsSinceEpoch % 1000000000);
+      final item = JewelleryItem(
+        id: uniqueNegativeId,
+        syncId: const Uuid().v4(),
+        // Use the entry's actual ID (could be negative for offline entries)
+        entry: widget.entry.id ?? -1,
         itemType: _itemType,
         name: _nameController.text,
-        weight: _itemType == 'Other' ? '' : _weightController.text,
+        weight: double.tryParse(_weightController.text),
         note: _noteController.text,
-        imagePath: _imageFile?.path,
+        image: _imageFile?.path,
       );
+
+      // Pass the entry's syncId so SyncManager can resolve the parent later
+      await LocalDbService.saveItem(item, entrySyncId: widget.entry.syncId);
+      
       if (mounted) Navigator.pop(context, true);
+
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    if (mounted) setState(() => _loading = false);
   }
 
   void _showImageSourceDialog() {

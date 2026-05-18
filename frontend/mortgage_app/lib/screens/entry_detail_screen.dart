@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../services/api_service.dart';
+import '../services/local_db_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'add_item_screen.dart';
 import 'edit_entry_screen.dart';
 import 'withdraw_screen.dart';
@@ -28,12 +30,36 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
   Future<void> _loadItems() async {
     setState(() => _loadingItems = true);
+
+    // LOCAL FIRST: always load from Hive immediately (works offline + online)
+    final hasRealId = _entry.id != null && _entry.id! > 0;
+    final localList = LocalDbService.getItemsForEntry(_entry.id ?? -1);
+    if (mounted) {
+      setState(() {
+        _items = localList;
+        _loadingItems = false;
+      });
+    }
+
+    // THEN: if online and entry is synced, refresh from server and save locally
+    final connectivity = await Connectivity().checkConnectivity();
+    final isOnline = !connectivity.contains(ConnectivityResult.none);
+    if (!isOnline || !hasRealId) return;
+
     try {
-      if (_entry.id == null) { setState(() => _loadingItems = false); return; }
-      final list = await ApiService().fetchItems(_entry.id!);
-      setState(() { _items = list; _loadingItems = false; });
-    } catch (e) {
-      setState(() => _loadingItems = false);
+      final serverList = await ApiService().fetchItems(_entry.id!).timeout(const Duration(seconds: 5));
+      // Save each server item locally (isSync: true so no re-queuing)
+      for (var item in serverList) {
+        item.syncId ??= 'server-${item.id}';
+        await LocalDbService.saveItem(item, isSync: true);
+      }
+      // Reload from local (now contains fresh server data)
+      if (mounted) {
+        final updated = LocalDbService.getItemsForEntry(_entry.id!);
+        setState(() => _items = updated);
+      }
+    } catch (_) {
+      // Server unavailable — already showing local data, nothing to do
     }
   }
 
@@ -51,8 +77,9 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     );
     if (confirm != true) return;
     try {
-      if (item.id == null) return;
-      await ApiService().deleteItem(item.id!);
+      if (item.syncId != null) {
+        await LocalDbService.deleteItem(item);
+      }
       _loadItems();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
@@ -101,11 +128,12 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             ),
         ],
       ),
-      floatingActionButton: (_entry.status == 'ACTIVE' || _entry.status == 'OVERDUE') && _entry.id != null
+      floatingActionButton: (_entry.status == 'ACTIVE' || _entry.status == 'OVERDUE')
           ? FloatingActionButton.extended(
               onPressed: () async {
                 final result = await Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => AddItemScreen(entryId: _entry.id!)),
+                  context,
+                  MaterialPageRoute(builder: (_) => AddItemScreen(entry: _entry)),
                 );
                 if (result == true) _loadItems();
               },
