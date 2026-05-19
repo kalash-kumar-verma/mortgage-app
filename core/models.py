@@ -258,6 +258,8 @@ class JewelleryItem(models.Model):
         return f"{self.name} ({self.item_type})"
 
 
+# DEPRECATED: Do not use for new development. 
+# Replaced by ActivityLog to ensure offline-first queue safety and prevent duplicate logs.
 class AuditLog(models.Model):
     ACTION_CHOICES = [
         ('CREATE', 'Created'),
@@ -294,3 +296,43 @@ class PartialPayment(models.Model):
 
     def __str__(self):
         return f"Payment of {self.amount} for {self.entry.sr_number} on {self.date.strftime('%Y-%m-%d')}"
+
+class ActivityLog(models.Model):
+    ACTION_CHOICES = [
+        ('CREATE', 'Created'),
+        ('EDIT', 'Edited'),
+        ('DELETE', 'Deleted'),
+        ('WITHDRAW', 'Withdrawn'),
+        ('PAYMENT', 'Partial Payment'),
+        ('PROFILE', 'Profile Update'),
+    ]
+    ENTITY_CHOICES = [
+        ('PARTY', 'Party'),
+        ('ENTRY', 'Entry'),
+        ('ITEM', 'Item'),
+        ('PAYMENT', 'Payment'),
+        ('PROFILE', 'Profile'),
+    ]
+
+    sync_id = models.UUIDField(default=uuid.uuid4, unique=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    entity_type = models.CharField(max_length=20, choices=ENTITY_CHOICES)
+    
+    # Store snapshots so log survives entity deletion
+    entity_id = models.IntegerField(null=True, blank=True)
+    entity_sync_id = models.CharField(max_length=50, null=True, blank=True)
+    entity_name_snapshot = models.CharField(max_length=255, blank=True, default='')
+    
+    timestamp = models.DateTimeField()
+    description = models.TextField()
+    old_values = models.JSONField(null=True, blank=True)
+    new_values = models.JSONField(null=True, blank=True)
+    
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='activities')
+    device_id = models.CharField(max_length=100, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"[{self.action}] {self.entity_name_snapshot} at {self.timestamp}"

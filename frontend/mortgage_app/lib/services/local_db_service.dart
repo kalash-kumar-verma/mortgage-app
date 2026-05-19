@@ -7,6 +7,7 @@ import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../models/partial_payment.dart';
 import '../models/sync_action.dart';
+import '../models/activity_log.dart';
 
 class LocalDbService {
   // ─── User Namespace ───────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ class LocalDbService {
   static String get entryBoxName     => 'entries_$_namespace';
   static String get itemBoxName      => 'items_$_namespace';
   static String get paymentBoxName   => 'payments_$_namespace';
+  static String get activityBoxName  => 'activities_$_namespace';
   static String get syncBoxName      => 'sync_queue_$_namespace';
   // Tombstone box is intentionally GLOBAL (shared across users for safety)
   static const String tombstoneBoxName = 'tombstones';
@@ -39,6 +41,7 @@ class LocalDbService {
     if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(JewelleryItemAdapter());
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(SyncActionAdapter());
     if (!Hive.isAdapterRegistered(5)) Hive.registerAdapter(PartialPaymentAdapter());
+    if (!Hive.isAdapterRegistered(6)) Hive.registerAdapter(ActivityLogAdapter());
   }
 
   /// Open user-specific data boxes. Call after setUserNamespace().
@@ -47,6 +50,7 @@ class LocalDbService {
     if (!Hive.isBoxOpen(entryBoxName)) await Hive.openBox<Entry>(entryBoxName);
     if (!Hive.isBoxOpen(itemBoxName))  await Hive.openBox<JewelleryItem>(itemBoxName);
     if (!Hive.isBoxOpen(paymentBoxName)) await Hive.openBox<PartialPayment>(paymentBoxName);
+    if (!Hive.isBoxOpen(activityBoxName)) await Hive.openBox<ActivityLog>(activityBoxName);
     if (!Hive.isBoxOpen(syncBoxName))  await Hive.openBox<SyncAction>(syncBoxName);
   }
 
@@ -56,6 +60,7 @@ class LocalDbService {
     if (Hive.isBoxOpen(entryBoxName)) await Hive.box<Entry>(entryBoxName).close();
     if (Hive.isBoxOpen(itemBoxName))  await Hive.box<JewelleryItem>(itemBoxName).close();
     if (Hive.isBoxOpen(paymentBoxName)) await Hive.box<PartialPayment>(paymentBoxName).close();
+    if (Hive.isBoxOpen(activityBoxName)) await Hive.box<ActivityLog>(activityBoxName).close();
     if (Hive.isBoxOpen(syncBoxName))  await Hive.box<SyncAction>(syncBoxName).close();
   }
 
@@ -74,6 +79,7 @@ class LocalDbService {
   static Box<Entry>           get entryBox     => Hive.box<Entry>(entryBoxName);
   static Box<JewelleryItem>   get itemBox      => Hive.box<JewelleryItem>(itemBoxName);
   static Box<PartialPayment>  get paymentBox   => Hive.box<PartialPayment>(paymentBoxName);
+  static Box<ActivityLog>     get activityBox  => Hive.box<ActivityLog>(activityBoxName);
   static Box<SyncAction>      get syncBox      => Hive.box<SyncAction>(syncBoxName);
   static Box<int>             get tombstoneBox => Hive.box<int>(tombstoneBoxName);
 
@@ -142,15 +148,70 @@ class LocalDbService {
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
+  // ─── Activity Log ────────────────────────────────────────────────────────
+
+  static Future<void> logActivity({
+    required String action,
+    required String entityType,
+    int? entityId,
+    String? entitySyncId,
+    String entityNameSnapshot = '',
+    required String description,
+    String? oldValues,
+    String? newValues,
+    bool isSync = false,
+  }) async {
+    // Never generate logs during pull-sync to prevent infinite loops / duplicates
+    if (isSync) return;
+
+    final log = ActivityLog(
+      syncId: const Uuid().v4(),
+      action: action,
+      entityType: entityType,
+      entityId: entityId,
+      entitySyncId: entitySyncId,
+      entityNameSnapshot: entityNameSnapshot,
+      timestamp: DateTime.now(),
+      description: description,
+      oldValues: oldValues,
+      newValues: newValues,
+    );
+
+    await activityBox.put(log.syncId, log);
+    await _queueAction('POST', 'activities/', log.toJson());
+  }
+
   // ─── Parties ─────────────────────────────────────────────────────────────
 
   static List<Party> getParties() =>
       partyBox.values.toList().reversed.toList();
 
   static Future<void> saveParty(Party party, {bool isSync = false}) async {
+    final isNew = party.id == null && !partyBox.containsKey(party.syncId);
+    final oldParty = partyBox.get(party.syncId);
+    
     await partyBox.put(party.syncId, party);
+    
     if (!isSync) {
       await _queueAction('POST', 'parties/', party.toJson());
+      
+      final oldJson = isNew ? null : jsonEncode({
+        'name': oldParty?.name, 'phone': oldParty?.phone, 'address': oldParty?.address, 'note': oldParty?.note
+      });
+      final newJson = isNew ? null : jsonEncode({
+        'name': party.name, 'phone': party.phone, 'address': party.address, 'note': party.note
+      });
+      
+      await logActivity(
+        action: isNew ? 'CREATE' : 'EDIT',
+        entityType: 'PARTY',
+        entityId: party.id,
+        entitySyncId: party.syncId,
+        entityNameSnapshot: party.name,
+        description: isNew ? 'Party created' : 'Party updated',
+        oldValues: oldJson,
+        newValues: newJson,
+      );
     }
   }
 
@@ -189,6 +250,15 @@ class LocalDbService {
         await _cancelQueuedActionsForSyncId(syncId);
         await _addTombstone(syncId, 0);
       }
+      
+      await logActivity(
+        action: 'DELETE',
+        entityType: 'PARTY',
+        entityId: partyId,
+        entitySyncId: syncId,
+        entityNameSnapshot: p.name,
+        description: 'Party deleted',
+      );
     }
   }
 
@@ -266,11 +336,16 @@ class LocalDbService {
 
   static Future<void> saveEntry(Entry entry,
       {bool isSync = false, String? partySyncId}) async {
+    final isNew = entry.id == null && !entryBox.containsKey(entry.syncId);
+    final oldEntry = entryBox.get(entry.syncId);
+    
     await entryBox.put(entry.syncId, entry);
+    
     if (!isSync) {
       final json = entry.toJson();
       if (partySyncId != null) json['party_sync_id'] = partySyncId;
       final hasRealServerId = entry.id != null && entry.id! > 0;
+      
       if (hasRealServerId) {
         // Deduplicate: remove existing PATCH for same entry before adding new one
         final endpoint = 'entries/${entry.id}/';
@@ -286,6 +361,24 @@ class LocalDbService {
       } else {
         await _queueAction('POST', 'entries/', json);
       }
+
+      final oldJson = isNew ? null : jsonEncode({
+        'amount': oldEntry?.amount, 'interest': oldEntry?.interest, 'status': oldEntry?.status, 'due_date': oldEntry?.dueDate, 'note': oldEntry?.note
+      });
+      final newJson = isNew ? null : jsonEncode({
+        'amount': entry.amount, 'interest': entry.interest, 'status': entry.status, 'due_date': entry.dueDate, 'note': entry.note
+      });
+
+      await logActivity(
+        action: isNew ? 'CREATE' : 'EDIT',
+        entityType: 'ENTRY',
+        entityId: entry.id,
+        entitySyncId: entry.syncId,
+        entityNameSnapshot: '${entry.srNumber} (${entry.partyName})',
+        description: isNew ? 'Entry created' : 'Entry updated',
+        oldValues: oldJson,
+        newValues: newJson,
+      );
     }
   }
 
@@ -311,6 +404,15 @@ class LocalDbService {
         await _cancelQueuedActionsForSyncId(syncId);
         await _addTombstone(syncId, 0);
       }
+      
+      await logActivity(
+        action: 'DELETE',
+        entityType: 'ENTRY',
+        entityId: entryId,
+        entitySyncId: syncId,
+        entityNameSnapshot: '${entry.srNumber} (${entry.partyName})',
+        description: 'Entry deleted',
+      );
     }
   }
 
@@ -326,6 +428,15 @@ class LocalDbService {
       // Not yet synced — use syncId; SyncManager will resolve to real ID
       await _queueAction('POST', 'entries/${entry.syncId}/withdraw/', null);
     }
+
+    await logActivity(
+      action: 'WITHDRAW',
+      entityType: 'ENTRY',
+      entityId: entry.id,
+      entitySyncId: entry.syncId,
+      entityNameSnapshot: '${entry.srNumber} (${entry.partyName})',
+      description: 'Entry withdrawn',
+    );
   }
 
   // ─── Items ────────────────────────────────────────────────────────────────
@@ -348,6 +459,15 @@ class LocalDbService {
       final json = item.toJson();
       if (entrySyncId != null) json['entry_sync_id'] = entrySyncId;
       await _queueAction('POST', 'items/', json);
+      
+      await logActivity(
+        action: 'ADD_ITEM',
+        entityType: 'ITEM',
+        entityId: item.id,
+        entitySyncId: item.syncId,
+        entityNameSnapshot: item.name,
+        description: 'Item added: ${item.name}',
+      );
     }
   }
 
@@ -361,6 +481,15 @@ class LocalDbService {
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
       }
+      
+      await logActivity(
+        action: 'DELETE_ITEM',
+        entityType: 'ITEM',
+        entityId: itemId,
+        entitySyncId: syncId,
+        entityNameSnapshot: item.name,
+        description: 'Item deleted',
+      );
     }
   }
 
@@ -389,6 +518,15 @@ class LocalDbService {
       final json = payment.toJson();
       if (entrySyncId != null) json['entry_sync_id'] = entrySyncId;
       await _queueAction('POST', 'payments/', json);
+      
+      await logActivity(
+        action: 'PAYMENT',
+        entityType: 'PAYMENT',
+        entityId: payment.id,
+        entitySyncId: payment.syncId,
+        entityNameSnapshot: '₹${payment.amount}',
+        description: 'Partial payment added: ₹${payment.amount}',
+      );
     }
   }
 

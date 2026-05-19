@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Party, Entry, JewelleryItem, BusinessSetting, UserProfile, PartialPayment
+from .models import Party, Entry, JewelleryItem, BusinessSetting, UserProfile, PartialPayment, ActivityLog
 
 
 class BusinessSettingSerializer(serializers.ModelSerializer):
@@ -51,4 +51,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
 class PartialPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = PartialPayment
+        fields = '__all__'
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ActivityLog
+        # Prevent user client from modifying user field directly
+        read_only_fields = ('user',)
         fields = '__all__'

@@ -672,6 +672,13 @@ class SyncManager {
         await LocalDbService.partyBox.delete(partySyncId);
       }
 
+      // Fetch and overwrite all Activity Logs (immutable history)
+      final serverActivities = await ApiService().fetchActivities();
+      for (final log in serverActivities) {
+        // Simple overwrite is safe since logs are immutable
+        await LocalDbService.activityBox.put(log.syncId, log);
+      }
+
       await SettingsService.setLastSyncedAt(DateTime.now());
       debugPrint('[SyncManager] Pull reconcile complete.');
 

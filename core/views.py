@@ -7,11 +7,12 @@ from django.contrib.auth.models import User
 from django.db.models import Sum, Q
 from django.db import transaction
 
-from .models import Party, Entry, JewelleryItem, BusinessSetting, AuditLog, UserProfile, PartialPayment
+from .models import Party, Entry, JewelleryItem, BusinessSetting, AuditLog, UserProfile, PartialPayment, ActivityLog
 from .serializers import (
     PartySerializer, EntrySerializer,
     JewelleryItemSerializer, BusinessSettingSerializer,
-    UserProfileSerializer, PartialPaymentSerializer
+    UserProfileSerializer, PartialPaymentSerializer,
+    ActivityLogSerializer
 )
 
 
@@ -272,12 +273,7 @@ class EntryViewSet(viewsets.ModelViewSet):
         # Bump version on every successful PATCH regardless of whether client sent it
         serializer.save(version=entry.version + 1)
 
-        AuditLog.objects.create(
-            entry=entry,
-            action='EDIT',
-            description=f'Entry {entry.sr_number} updated (version → {entry.version}).',
-            actor=request.user.username,
-        )
+
 
         return Response(serializer.data)
 
@@ -324,15 +320,7 @@ class EntryViewSet(viewsets.ModelViewSet):
         entry.closed_at = dt.today()
         entry.save()
 
-        AuditLog.objects.create(
-            entry=entry,
-            action='WITHDRAW',
-            description=(
-                f"Entry {entry.sr_number} for {entry.party.name} withdrawn. "
-                f"Total settled: ₹{entry.total_payable}"
-            ),
-            actor=request.user.username,
-        )
+
 
         return Response(self.get_serializer(entry).data)
 
@@ -348,12 +336,7 @@ class EntryViewSet(viewsets.ModelViewSet):
         entry.status = 'OVERDUE'
         entry.save()
 
-        AuditLog.objects.create(
-            entry=entry,
-            action='OVERDUE',
-            description=f"Entry {entry.sr_number} for {entry.party.name} marked as overdue.",
-            actor=request.user.username,
-        )
+
         return Response(self.get_serializer(entry).data)
 
 
@@ -428,3 +411,15 @@ class PartialPaymentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Users can only see payments for entries linked to parties they own
         return PartialPayment.objects.filter(entry__party__owner=self.request.user)
+
+class ActivityLogViewSet(viewsets.ModelViewSet):
+    serializer_class = ActivityLogSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Users can only see their own activities
+        return ActivityLog.objects.filter(user=self.request.user).order_by('-timestamp')
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

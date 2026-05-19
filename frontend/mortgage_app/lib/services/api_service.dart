@@ -5,6 +5,7 @@ import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../models/business_setting.dart';
 import '../models/partial_payment.dart';
+import '../models/activity_log.dart';
 import 'settings_service.dart';
 
 class ApiService {
@@ -28,6 +29,16 @@ class ApiService {
     } else {
       throw Exception('Failed to logout all devices');
     }
+  }
+
+  // ─── Activity Logs ──────────────────────────────────────────
+  Future<List<ActivityLog>> fetchActivities() async {
+    final response = await http.get(Uri.parse('$baseUrl/activities/'), headers: _headers);
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      return data.map((json) => ActivityLog.fromJson(json)).toList();
+    }
+    return [];
   }
 
   // ─── Business Settings ──────────────────────────────────────

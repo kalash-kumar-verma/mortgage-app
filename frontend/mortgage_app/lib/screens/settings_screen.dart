@@ -11,6 +11,7 @@ import 'login_screen.dart';
 import 'sync_diagnostics_screen.dart';
 import 'recycle_bin_screen.dart';
 import 'profile_screen.dart';
+import 'activity_history_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -514,6 +515,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // ── Data & Sync ───────────────────────────────────────────
           _section('Data & Sync'),
+          _tile(
+            icon: Icons.history,
+            title: 'Activity History',
+            subtitle: 'View audit trail and timeline',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityHistoryScreen())),
+          ),
+          _dividerTile(),
           _tile(
             icon: Icons.delete_sweep_outlined,
             title: 'Recycle Bin',
