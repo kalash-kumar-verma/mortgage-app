@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/entry.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
-import 'receipt_screen.dart';
+import '../services/sync_manager.dart';
 
 class WithdrawScreen extends StatefulWidget {
   final Entry entry;
@@ -42,20 +42,29 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
       return;
     }
 
+    // Guard: already withdrawn — should never reach here, but be safe
+    if (widget.entry.status == 'WITHDRAWN') {
+      if (mounted) Navigator.pop(context, widget.entry);
+      return;
+    }
+
     setState(() { _loading = true; _error = null; });
 
-    // Bug #3 fix: removed the entry.id == null guard.
-    // Offline-created entries have a *negative* local ID, not null.
-    // LocalDbService.withdrawEntry handles both synced (positive ID) and
-    // unsynced (negative ID, uses syncId endpoint) entries correctly.
     try {
       await LocalDbService.withdrawEntry(widget.entry);
 
+      // Trigger background sync — non-blocking (fire-and-forget)
+      SyncManager().performFullSync();
+
+      // Reload the fresh entry from Hive so the caller gets accurate state
+      final syncId = widget.entry.syncId;
+      final freshEntry = syncId != null
+          ? LocalDbService.entryBox.get(syncId) ?? widget.entry
+          : widget.entry;
+
       if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => ReceiptScreen(entry: widget.entry)),
-        );
+        // Pop back to EntryDetailScreen WITH the updated entry
+        Navigator.pop(context, freshEntry);
       }
     } catch (e) {
       if (mounted) {

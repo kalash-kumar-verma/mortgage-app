@@ -9,6 +9,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'add_item_screen.dart';
 import 'edit_entry_screen.dart';
 import 'withdraw_screen.dart';
+import 'receipt_screen.dart';
 import 'partial_payment_dialog.dart';
 
 class EntryDetailScreen extends StatefulWidget {
@@ -25,6 +26,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   bool _loadingItems = true;
   List<PartialPayment> _payments = [];
   bool _loadingPayments = true;
+  bool _withdrawing = false; // guard against double-tap
 
   @override
   void initState() {
@@ -261,16 +263,51 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: OutlinedButton.icon(
-                onPressed: () async {
+                onPressed: _withdrawing ? null : () async {
+                  // Double-tap guard
+                  if (_withdrawing || !_canWithdraw) return;
+                  setState(() => _withdrawing = true);
+
                   final updated = await Navigator.push<Entry>(
                     context,
                     MaterialPageRoute(builder: (_) => WithdrawScreen(entry: _entry)),
                   );
-                  if (updated != null) setState(() => _entry = updated);
+
+                  // WithdrawScreen now pops with the fresh Hive entry
+                  if (updated != null && mounted) {
+                    setState(() {
+                      _entry = updated;
+                      _withdrawing = false;
+                    });
+                    // Show receipt immediately after status update
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => ReceiptScreen(entry: _entry)),
+                    );
+                  } else if (mounted) {
+                    // User cancelled — re-enable button
+                    // Also reload from Hive in case Hive was written but entry wasn't returned
+                    final syncId = _entry.syncId;
+                    if (syncId != null) {
+                      final fresh = LocalDbService.entryBox.get(syncId);
+                      if (fresh != null && mounted) {
+                        setState(() { _entry = fresh; _withdrawing = false; });
+                      } else {
+                        setState(() => _withdrawing = false);
+                      }
+                    } else {
+                      setState(() => _withdrawing = false);
+                    }
+                  }
                 },
-                icon: const Icon(Icons.undo, color: Colors.blue),
-                label: const Text('Withdraw Entry', style: TextStyle(color: Colors.blue)),
-                style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.blue)),
+                icon: Icon(Icons.undo, color: _withdrawing ? Colors.grey : Colors.blue),
+                label: Text(
+                  _withdrawing ? 'Processing…' : 'Withdraw Entry',
+                  style: TextStyle(color: _withdrawing ? Colors.grey : Colors.blue),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: _withdrawing ? Colors.grey : Colors.blue),
+                ),
               ),
             ),
           ],
