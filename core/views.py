@@ -7,10 +7,11 @@ from django.contrib.auth.models import User
 from django.db.models import Sum, Q
 from django.db import transaction
 
-from .models import Party, Entry, JewelleryItem, BusinessSetting, AuditLog
+from .models import Party, Entry, JewelleryItem, BusinessSetting, AuditLog, UserProfile, PartialPayment
 from .serializers import (
     PartySerializer, EntrySerializer,
     JewelleryItemSerializer, BusinessSettingSerializer,
+    UserProfileSerializer, PartialPaymentSerializer
 )
 
 
@@ -86,6 +87,35 @@ class LogoutAllDevicesView(views.APIView):
             
         return Response({'token': new_token.key, 'username': request.user.username})
 
+
+# ─── User Profile ────────────────────────────────────────────────────────────
+
+class UserProfileView(views.APIView):
+    def get(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        serializer = UserProfileSerializer(profile)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        
+        # Safely update user fields if provided
+        user = request.user
+        user_updated = False
+        if 'email' in request.data:
+            user.email = request.data['email']
+            user_updated = True
+        if 'username' in request.data:
+            user.username = request.data['username']
+            user_updated = True
+        if user_updated:
+            user.save()
+            
+        serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # ─── Business Settings ───────────────────────────────────────────────────────
 
@@ -390,3 +420,11 @@ class JewelleryItemViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save(version=item.version + 1)
         return Response(serializer.data)
+
+class PartialPaymentViewSet(viewsets.ModelViewSet):
+    serializer_class = PartialPaymentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Users can only see payments for entries linked to parties they own
+        return PartialPayment.objects.filter(entry__party__owner=self.request.user)

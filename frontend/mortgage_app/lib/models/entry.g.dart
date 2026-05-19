@@ -17,28 +17,31 @@ class EntryAdapter extends TypeAdapter<Entry> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return Entry(
-      id:           fields[0]  as int?,
-      srNumber:     fields[1]  as String,
-      party:        fields[2]  as int,
-      amount:       fields[3]  as String,
-      interest:     fields[4]  as String,
-      status:       fields[5]  as String,
-      date:         fields[6]  as String,
-      totalPayable: fields[7]  as double,
-      daysElapsed:  fields[8]  as int,
-      partyName:    fields[9]  as String,
-      note:         fields[10] as String,
-      closedAt:     fields[11] as String?,
-      syncId:       fields[12] as String?,
-      dueDate:      fields[13] as String?,
-      version:      (fields[14] as int?) ?? 1,  // default 1 for old installs
+      id: fields[0] as int?,
+      srNumber: fields[1] as String,
+      party: fields[2] as int,
+      amount: fields[3] as String,
+      interest: fields[4] as String,
+      status: fields[5] as String,
+      date: fields[6] as String,
+      totalPayable: fields[7] as double,
+      daysElapsed: fields[8] as int,
+      partyName: fields[9] as String,
+      note: fields[10] as String,
+      closedAt: fields[11] as String?,
+      syncId: fields[12] as String?,
+      dueDate: fields[13] as String?,
+      version: fields[14] as int,
+      totalPaid: fields[15] as double?,
+      remainingPrincipal: fields[16] as double?,
+      totalAccruedInterest: fields[17] as double?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Entry obj) {
     writer
-      ..writeByte(15)   // total number of fields
+      ..writeByte(18)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -68,7 +71,13 @@ class EntryAdapter extends TypeAdapter<Entry> {
       ..writeByte(13)
       ..write(obj.dueDate)
       ..writeByte(14)
-      ..write(obj.version);
+      ..write(obj.version)
+      ..writeByte(15)
+      ..write(obj.totalPaid)
+      ..writeByte(16)
+      ..write(obj.remainingPrincipal)
+      ..writeByte(17)
+      ..write(obj.totalAccruedInterest);
   }
 
   @override

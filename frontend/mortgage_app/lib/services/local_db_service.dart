@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../models/party.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
+import '../models/partial_payment.dart';
 import '../models/sync_action.dart';
 
 class LocalDbService {
@@ -25,6 +26,7 @@ class LocalDbService {
   static String get partyBoxName     => 'parties_$_namespace';
   static String get entryBoxName     => 'entries_$_namespace';
   static String get itemBoxName      => 'items_$_namespace';
+  static String get paymentBoxName   => 'payments_$_namespace';
   static String get syncBoxName      => 'sync_queue_$_namespace';
   // Tombstone box is intentionally GLOBAL (shared across users for safety)
   static const String tombstoneBoxName = 'tombstones';
@@ -36,6 +38,7 @@ class LocalDbService {
     if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(EntryAdapter());
     if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(JewelleryItemAdapter());
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(SyncActionAdapter());
+    if (!Hive.isAdapterRegistered(5)) Hive.registerAdapter(PartialPaymentAdapter());
   }
 
   /// Open user-specific data boxes. Call after setUserNamespace().
@@ -43,6 +46,7 @@ class LocalDbService {
     if (!Hive.isBoxOpen(partyBoxName)) await Hive.openBox<Party>(partyBoxName);
     if (!Hive.isBoxOpen(entryBoxName)) await Hive.openBox<Entry>(entryBoxName);
     if (!Hive.isBoxOpen(itemBoxName))  await Hive.openBox<JewelleryItem>(itemBoxName);
+    if (!Hive.isBoxOpen(paymentBoxName)) await Hive.openBox<PartialPayment>(paymentBoxName);
     if (!Hive.isBoxOpen(syncBoxName))  await Hive.openBox<SyncAction>(syncBoxName);
   }
 
@@ -51,6 +55,7 @@ class LocalDbService {
     if (Hive.isBoxOpen(partyBoxName)) await Hive.box<Party>(partyBoxName).close();
     if (Hive.isBoxOpen(entryBoxName)) await Hive.box<Entry>(entryBoxName).close();
     if (Hive.isBoxOpen(itemBoxName))  await Hive.box<JewelleryItem>(itemBoxName).close();
+    if (Hive.isBoxOpen(paymentBoxName)) await Hive.box<PartialPayment>(paymentBoxName).close();
     if (Hive.isBoxOpen(syncBoxName))  await Hive.box<SyncAction>(syncBoxName).close();
   }
 
@@ -68,6 +73,7 @@ class LocalDbService {
   static Box<Party>           get partyBox     => Hive.box<Party>(partyBoxName);
   static Box<Entry>           get entryBox     => Hive.box<Entry>(entryBoxName);
   static Box<JewelleryItem>   get itemBox      => Hive.box<JewelleryItem>(itemBoxName);
+  static Box<PartialPayment>  get paymentBox   => Hive.box<PartialPayment>(paymentBoxName);
   static Box<SyncAction>      get syncBox      => Hive.box<SyncAction>(syncBoxName);
   static Box<int>             get tombstoneBox => Hive.box<int>(tombstoneBoxName);
 
@@ -361,6 +367,41 @@ class LocalDbService {
   static Future<void> saveBusinessSetting(dynamic setting, {bool isSync = false}) async {
     if (!isSync) {
       await _queueAction('PUT', 'settings/', setting.toJson());
+    }
+  }
+
+  // ─── Partial Payments ───────────────────────────────────────────────────────
+
+  static List<PartialPayment> getPaymentsForEntrySyncId(String entrySyncId) {
+    final entry = entryBox.get(entrySyncId);
+    if (entry == null) return [];
+    return paymentBox.values.where((p) => p.entry == entry.id).toList()
+      ..sort((a, b) {
+        final dateA = DateTime.tryParse(a.date) ?? DateTime(1970);
+        final dateB = DateTime.tryParse(b.date) ?? DateTime(1970);
+        return dateA.compareTo(dateB); // chronological
+      });
+  }
+
+  static Future<void> savePayment(PartialPayment payment, {bool isSync = false, String? entrySyncId}) async {
+    await paymentBox.put(payment.syncId, payment);
+    if (!isSync) {
+      final json = payment.toJson();
+      if (entrySyncId != null) json['entry_sync_id'] = entrySyncId;
+      await _queueAction('POST', 'payments/', json);
+    }
+  }
+
+  static Future<void> deletePayment(PartialPayment payment, {bool isSync = false}) async {
+    final paymentId = payment.id;
+    final syncId = payment.syncId;
+    await payment.delete();
+    if (!isSync && syncId != null) {
+      if (paymentId != null && paymentId > 0) {
+        await _queueAction('DELETE', 'payments/$paymentId/', null);
+      } else {
+        await _cancelQueuedActionsForSyncId(syncId);
+      }
     }
   }
 }

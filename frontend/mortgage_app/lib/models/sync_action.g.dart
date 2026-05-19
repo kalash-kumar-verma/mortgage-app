@@ -17,23 +17,23 @@ class SyncActionAdapter extends TypeAdapter<SyncAction> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return SyncAction(
-      id:               fields[0] as String,
-      method:           fields[1] as String,
-      endpoint:         fields[2] as String,
-      payload:          fields[3] as String?,
-      timestamp:        fields[4] as DateTime,
-      isSyncing:        fields[5] as bool? ?? false,
-      status:           fields[6] as String? ?? 'pending',   // safe default for old records
-      retryCount:       fields[7] as int?    ?? 0,
-      failureReason:    fields[8] as String?,
-      idempotencyKey:   fields[9] as String?,                // will fallback to id in constructor
+      id: fields[0] as String,
+      method: fields[1] as String,
+      endpoint: fields[2] as String,
+      payload: fields[3] as String?,
+      timestamp: fields[4] as DateTime,
+      isSyncing: fields[5] as bool,
+      status: fields[6] as String,
+      retryCount: fields[7] as int,
+      failureReason: fields[8] as String?,
+      idempotencyKey: fields[9] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, SyncAction obj) {
     writer
-      ..writeByte(10)   // total number of fields
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)

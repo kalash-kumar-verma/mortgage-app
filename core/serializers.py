@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Party, Entry, JewelleryItem, BusinessSetting
+from .models import Party, Entry, JewelleryItem, BusinessSetting, UserProfile, PartialPayment
 
 
 class BusinessSettingSerializer(serializers.ModelSerializer):
@@ -20,6 +20,9 @@ class EntrySerializer(serializers.ModelSerializer):
     days_elapsed = serializers.ReadOnlyField()
     due_date_display = serializers.ReadOnlyField()
     days_remaining = serializers.ReadOnlyField()
+    total_paid = serializers.ReadOnlyField()
+    remaining_principal = serializers.ReadOnlyField()
+    total_accrued_interest = serializers.ReadOnlyField()
     party_name = serializers.SerializerMethodField()
 
     def get_party_name(self, obj):
@@ -33,4 +36,19 @@ class EntrySerializer(serializers.ModelSerializer):
 class JewelleryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = JewelleryItem
+        fields = '__all__'
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = UserProfile
+        fields = ['phone', 'avatar_url', 'business_metadata', 'username', 'email']
+
+
+class PartialPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PartialPayment
         fields = '__all__'

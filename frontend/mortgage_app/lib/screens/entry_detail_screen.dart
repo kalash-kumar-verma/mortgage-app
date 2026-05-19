@@ -1,12 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
+import '../models/partial_payment.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'add_item_screen.dart';
 import 'edit_entry_screen.dart';
 import 'withdraw_screen.dart';
+import 'partial_payment_dialog.dart';
 
 class EntryDetailScreen extends StatefulWidget {
   final Entry entry;
@@ -20,12 +23,49 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   late Entry _entry;
   List<JewelleryItem> _items = [];
   bool _loadingItems = true;
+  List<PartialPayment> _payments = [];
+  bool _loadingPayments = true;
 
   @override
   void initState() {
     super.initState();
     _entry = widget.entry;
     _loadItems();
+    _loadPayments();
+  }
+
+  Future<void> _loadPayments() async {
+    setState(() => _loadingPayments = true);
+
+    final localList = _entry.syncId != null
+        ? LocalDbService.getPaymentsForEntrySyncId(_entry.syncId!)
+        : <PartialPayment>[];
+    if (mounted) {
+      setState(() {
+        _payments = localList;
+        _loadingPayments = false;
+      });
+    }
+
+    final hasRealId = _entry.id != null && _entry.id! > 0;
+    final connectivity = await Connectivity().checkConnectivity();
+    final isOnline = !connectivity.contains(ConnectivityResult.none);
+    if (!isOnline || !hasRealId) return;
+
+    try {
+      final serverList = await ApiService().fetchPayments(_entry.id!).timeout(const Duration(seconds: 5));
+      for (var p in serverList) {
+        p.syncId ??= 'server-${p.id}';
+        if (LocalDbService.isTombstoned(p.syncId)) continue;
+        await LocalDbService.savePayment(p, isSync: true);
+      }
+      if (mounted) {
+        final updated = _entry.syncId != null
+            ? LocalDbService.getPaymentsForEntrySyncId(_entry.syncId!)
+            : <PartialPayment>[];
+        setState(() => _payments = updated);
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadItems() async {
@@ -147,9 +187,12 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
               label: const Text('Add Item'),
             )
           : null,
-      body: ListView(
-        padding: const EdgeInsets.all(12),
-        children: [
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800),
+          child: ListView(
+            padding: const EdgeInsets.all(12),
+            children: [
           // Status + summary card
           Card(
             child: Padding(
@@ -181,6 +224,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   _row('Date', _entry.date),
                   _row('Days Elapsed', '${_entry.computedDaysElapsed} days'),
                   _row('Total Payable', '₹${_entry.computedTotalPayable.toStringAsFixed(2)}', highlight: true),
+                  if (_entry.effectiveTotalPaid > 0) ...[
+                    _row('Total Paid', '₹${_entry.effectiveTotalPaid.toStringAsFixed(2)}', highlight: true, valueColor: Colors.green),
+                    _row('Remaining Principal', '₹${_entry.effectiveRemainingPrincipal.toStringAsFixed(2)}', highlight: true, valueColor: Colors.orange),
+                    _row('Accrued Interest', '₹${_entry.effectiveTotalAccruedInterest.toStringAsFixed(2)}', highlight: true, valueColor: Colors.red),
+                  ],
                   if (_entry.closedAt != null) _row('Closed On', _entry.closedAt!),
                   // Due date row
                   _dueDateRow(),
@@ -267,18 +315,28 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                     Text(item.itemType),
                     if (item.weight != null) Text('${item.weight} g', style: const TextStyle(fontSize: 12)),
                     if (item.note.isNotEmpty) Text(item.note, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                    if (item.image != null) 
+                    if (item.image != null && item.image!.isNotEmpty) 
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            '${ApiService.baseUrl.replaceAll('/api', '')}${item.image}',
-                            height: 100,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => const SizedBox(),
-                          ),
+                          child: item.image!.startsWith('http') || item.image!.startsWith('/media/')
+                              ? Image.network(
+                                  item.image!.startsWith('http') 
+                                      ? item.image! 
+                                      : '${ApiService.baseUrl.replaceAll('/api', '')}${item.image}',
+                                  height: 100,
+                                  width: double.infinity,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const SizedBox(),
+                                )
+                              : Image.file(
+                                  File(item.image!),
+                                  height: 100,
+                                  width: double.infinity,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const SizedBox(),
+                                ),
                         ),
                       ),
                   ],
@@ -292,8 +350,12 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                     : null,
               ),
             ))),
+
+          _buildPaymentsSection(),
         ],
+        ),
       ),
+    ),
     );
   }
 
@@ -362,7 +424,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     );
   }
 
-  Widget _row(String label, String value, {bool highlight = false}) {
+  Widget _row(String label, String value, {bool highlight = false, Color? valueColor}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
@@ -374,11 +436,65 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             style: TextStyle(
               fontWeight: highlight ? FontWeight.bold : FontWeight.w500,
               fontSize: highlight ? 16 : 13,
-              color: highlight ? const Color(0xFF5C35D4) : null,
+              color: valueColor ?? (highlight ? const Color(0xFF5C35D4) : null),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPaymentsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Payments (${_payments.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            if (_canEdit)
+              TextButton.icon(
+                onPressed: () async {
+                  final added = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => PartialPaymentDialog(entry: _entry),
+                  );
+                  if (added == true) {
+                    _loadPayments();
+                  }
+                },
+                icon: const Icon(Icons.add_card, size: 18),
+                label: const Text('Add Payment'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_loadingPayments)
+          const Center(child: CircularProgressIndicator())
+        else if (_payments.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No payments recorded yet.', style: TextStyle(color: Colors.grey)),
+            ),
+          )
+        else
+          ...(_payments.map((p) => Card(
+            child: ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Colors.green,
+                child: Icon(Icons.currency_rupee, color: Colors.white, size: 18),
+              ),
+              title: Text('₹${p.amount}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                '${p.date}${p.note.isNotEmpty ? '\n${p.note}' : ''}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              isThreeLine: p.note.isNotEmpty,
+            ),
+          ))),
+      ],
     );
   }
 }

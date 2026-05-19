@@ -10,6 +10,7 @@ import '../models/sync_action.dart';
 import 'login_screen.dart';
 import 'sync_diagnostics_screen.dart';
 import 'recycle_bin_screen.dart';
+import 'profile_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -232,63 +233,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 30,
-            backgroundColor: Colors.white.withValues(alpha: 0.25),
-            child: Text(initials,
-                style: const TextStyle(
-                    fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(username,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17)),
-                const SizedBox(height: 2),
-                Text(businessName,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.8), fontSize: 13)),
-              ],
+      child: InkWell(
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ProfileScreen()),
+          );
+          if (mounted) setState(() {});
+        },
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.white.withValues(alpha: 0.25),
+              child: Text(initials,
+                  style: const TextStyle(
+                      fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
             ),
-          ),
-          IconButton(
-            onPressed: _editProfileDialog,
-            icon: const Icon(Icons.edit_outlined, color: Colors.white, size: 20),
-          ),
-        ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(username,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17)),
+                  const SizedBox(height: 2),
+                  Text(businessName,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8), fontSize: 13)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white, size: 24),
+          ],
+        ),
       ),
     );
   }
 
-  Future<void> _editProfileDialog() async {
-    final businessCtrl = TextEditingController(text: SettingsService.businessName);
-    await showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Edit Profile'),
-        content: TextField(
-          controller: businessCtrl,
-          decoration: const InputDecoration(labelText: 'Business Name'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              await SettingsService.setBusinessName(businessCtrl.text.trim());
-              if (mounted) { setState(() {}); Navigator.pop(context); }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
 
   Future<void> _editInterestRateDialog() async {
     final ctrl = TextEditingController(text: SettingsService.defaultInterest);

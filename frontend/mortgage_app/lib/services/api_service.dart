@@ -4,6 +4,7 @@ import '../models/party.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../models/business_setting.dart';
+import '../models/partial_payment.dart';
 import 'settings_service.dart';
 
 class ApiService {
@@ -229,6 +230,16 @@ class ApiService {
     throw Exception('Failed to load items');
   }
 
+  // ─── Payments ──────────────────────────────────────────────
+  Future<List<PartialPayment>> fetchPayments(int entryId) async {
+    final response = await http.get(Uri.parse('$baseUrl/payments/?entry=$entryId'), headers: _headers);
+    if (response.statusCode == 200) {
+      List data = jsonDecode(response.body);
+      return data.map((e) => PartialPayment.fromJson(e)).toList();
+    }
+    throw Exception('Failed to load payments');
+  }
+
   Future<JewelleryItem> createItem({
     required int entry,
     required String itemType,
@@ -272,5 +283,26 @@ class ApiService {
   Future<void> deleteItem(int id) async {
     final response = await http.delete(Uri.parse('$baseUrl/items/$id/'), headers: _headers);
     if (response.statusCode != 204) throw Exception('Failed to delete item');
+  }
+
+  // ─── User Profile ────────────────────────────────────────────
+  Future<Map<String, dynamic>> fetchProfile() async {
+    final response = await http.get(Uri.parse('$baseUrl/profile/'), headers: _headers);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Failed to load profile');
+  }
+
+  Future<Map<String, dynamic>> updateProfile(Map<String, dynamic> data) async {
+    final response = await http.patch(
+      Uri.parse('$baseUrl/profile/'),
+      headers: _headers,
+      body: jsonEncode(data),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Failed to update profile: ${response.body}');
   }
 }

@@ -1,56 +1,47 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'jewellery_item.dart';
+part of 'partial_payment.dart';
 
 // **************************************************************************
 // TypeAdapterGenerator
 // **************************************************************************
 
-class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
+class PartialPaymentAdapter extends TypeAdapter<PartialPayment> {
   @override
-  final int typeId = 3;
+  final int typeId = 5;
 
   @override
-  JewelleryItem read(BinaryReader reader) {
+  PartialPayment read(BinaryReader reader) {
     final numOfFields = reader.readByte();
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
-    return JewelleryItem(
+    return PartialPayment(
       id: fields[0] as int?,
       entry: fields[1] as int,
-      itemType: fields[2] as String,
-      name: fields[3] as String,
-      weight: fields[4] as double?,
-      note: fields[5] as String,
-      image: fields[6] as String?,
-      syncId: fields[7] as String?,
-      version: fields[8] as int,
+      amount: fields[2] as String,
+      date: fields[3] as String,
+      note: fields[4] as String,
+      syncId: fields[5] as String?,
     );
   }
 
   @override
-  void write(BinaryWriter writer, JewelleryItem obj) {
+  void write(BinaryWriter writer, PartialPayment obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
       ..write(obj.entry)
       ..writeByte(2)
-      ..write(obj.itemType)
+      ..write(obj.amount)
       ..writeByte(3)
-      ..write(obj.name)
+      ..write(obj.date)
       ..writeByte(4)
-      ..write(obj.weight)
-      ..writeByte(5)
       ..write(obj.note)
-      ..writeByte(6)
-      ..write(obj.image)
-      ..writeByte(7)
-      ..write(obj.syncId)
-      ..writeByte(8)
-      ..write(obj.version);
+      ..writeByte(5)
+      ..write(obj.syncId);
   }
 
   @override
@@ -59,7 +50,7 @@ class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is JewelleryItemAdapter &&
+      other is PartialPaymentAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }

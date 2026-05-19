@@ -520,10 +520,16 @@ class SyncManager {
           await LocalDbService.saveParty(serverParty, isSync: true);
         } else {
           bool dirty = false;
-          if (localParty.name != serverParty.name)       { localParty.name = serverParty.name; dirty = true; }
-          if (localParty.phone != serverParty.phone)     { localParty.phone = serverParty.phone; dirty = true; }
-          if (localParty.address != serverParty.address) { localParty.address = serverParty.address; dirty = true; }
           if (serverParty.id != null && localParty.id != serverParty.id) { localParty.id = serverParty.id; dirty = true; }
+          
+          final hasPendingOp = pendingSyncIds.contains(localParty.syncId) || 
+                               (localParty.id != null && pendingSyncIds.contains(localParty.id.toString()));
+          
+          if (!hasPendingOp) {
+            if (localParty.name != serverParty.name)       { localParty.name = serverParty.name; dirty = true; }
+            if (localParty.phone != serverParty.phone)     { localParty.phone = serverParty.phone; dirty = true; }
+            if (localParty.address != serverParty.address) { localParty.address = serverParty.address; dirty = true; }
+          }
           if (dirty) await localParty.save();
         }
 
@@ -543,13 +549,19 @@ class SyncManager {
           } else {
             bool dirty = false;
             if (serverEntry.id != null && localEntry.id != serverEntry.id) { localEntry.id = serverEntry.id; dirty = true; }
-            if (localEntry.status != serverEntry.status)                   { localEntry.status = serverEntry.status; dirty = true; }
-            if (localEntry.version < serverEntry.version)                  { localEntry.version = serverEntry.version; dirty = true; }
-            if (localEntry.closedAt != serverEntry.closedAt)              { localEntry.closedAt = serverEntry.closedAt; dirty = true; }
-            if (localEntry.amount != serverEntry.amount)                   { localEntry.amount = serverEntry.amount; dirty = true; }
-            if (localEntry.interest != serverEntry.interest)               { localEntry.interest = serverEntry.interest; dirty = true; }
-            if (serverEntry.srNumber.isNotEmpty && localEntry.srNumber != serverEntry.srNumber) {
-              localEntry.srNumber = serverEntry.srNumber; dirty = true;
+            
+            final hasPendingOp = pendingSyncIds.contains(localEntry.syncId) || 
+                                 (localEntry.id != null && pendingSyncIds.contains(localEntry.id.toString()));
+                                 
+            if (!hasPendingOp) {
+              if (localEntry.status != serverEntry.status)                   { localEntry.status = serverEntry.status; dirty = true; }
+              if (localEntry.version < serverEntry.version)                  { localEntry.version = serverEntry.version; dirty = true; }
+              if (localEntry.closedAt != serverEntry.closedAt)              { localEntry.closedAt = serverEntry.closedAt; dirty = true; }
+              if (localEntry.amount != serverEntry.amount)                   { localEntry.amount = serverEntry.amount; dirty = true; }
+              if (localEntry.interest != serverEntry.interest)               { localEntry.interest = serverEntry.interest; dirty = true; }
+              if (serverEntry.srNumber.isNotEmpty && localEntry.srNumber != serverEntry.srNumber) {
+                localEntry.srNumber = serverEntry.srNumber; dirty = true;
+              }
             }
             if (dirty) await localEntry.save();
           }
@@ -568,9 +580,15 @@ class SyncManager {
             } else {
               bool dirty = false;
               if (serverItem.id != null && localItem.id != serverItem.id) { localItem.id = serverItem.id; dirty = true; }
-              if (localItem.version < serverItem.version)                 { localItem.version = serverItem.version; dirty = true; }
-              if (localItem.name != serverItem.name)                      { localItem.name = serverItem.name; dirty = true; }
-              if (localItem.note != serverItem.note)                      { localItem.note = serverItem.note; dirty = true; }
+              
+              final hasPendingOp = pendingSyncIds.contains(localItem.syncId) || 
+                                   (localItem.id != null && pendingSyncIds.contains(localItem.id.toString()));
+                                   
+              if (!hasPendingOp) {
+                if (localItem.version < serverItem.version)                 { localItem.version = serverItem.version; dirty = true; }
+                if (localItem.name != serverItem.name)                      { localItem.name = serverItem.name; dirty = true; }
+                if (localItem.note != serverItem.note)                      { localItem.note = serverItem.note; dirty = true; }
+              }
               if (dirty) await localItem.save();
             }
           }
@@ -584,6 +602,42 @@ class SyncManager {
             if (pendingSyncIds.contains(itemSyncId)) continue;
             debugPrint('[SyncManager] Reconcile: removing item $itemSyncId (deleted on server)');
             await localItem.delete();
+          }
+
+          // Payments
+          final serverPayments = await ApiService().fetchPayments(serverEntry.id!);
+          final serverPaymentSyncIds = <String>{};
+
+          for (final serverPayment in serverPayments) {
+            serverPayment.syncId ??= 'server-${serverPayment.id}';
+            serverPaymentSyncIds.add(serverPayment.syncId!);
+            if (LocalDbService.isTombstoned(serverPayment.syncId!)) continue;
+            final localPayment = LocalDbService.paymentBox.get(serverPayment.syncId);
+            if (localPayment == null) {
+              await LocalDbService.savePayment(serverPayment, isSync: true);
+            } else {
+              bool dirty = false;
+              if (serverPayment.id != null && localPayment.id != serverPayment.id) { localPayment.id = serverPayment.id; dirty = true; }
+              
+              final hasPendingOp = pendingSyncIds.contains(localPayment.syncId) || 
+                                   (localPayment.id != null && pendingSyncIds.contains(localPayment.id.toString()));
+                                   
+              if (!hasPendingOp) {
+                if (localPayment.amount != serverPayment.amount) { localPayment.amount = serverPayment.amount; dirty = true; }
+                if (localPayment.note != serverPayment.note) { localPayment.note = serverPayment.note; dirty = true; }
+              }
+              if (dirty) await localPayment.save();
+            }
+          }
+
+          // Remove local payments deleted on server
+          for (final localPayment in LocalDbService.paymentBox.values.where((p) => p.entry == entryLocalId).toList()) {
+            final paymentSyncId = localPayment.syncId ?? '';
+            if (serverPaymentSyncIds.contains(paymentSyncId)) continue;
+            if (LocalDbService.isTombstoned(paymentSyncId)) continue;
+            if (pendingSyncIds.contains(paymentSyncId)) continue;
+            debugPrint('[SyncManager] Reconcile: removing payment $paymentSyncId (deleted on server)');
+            await localPayment.delete();
           }
         }
 

@@ -54,6 +54,15 @@ class Entry extends HiveObject {
   @HiveField(14)
   int version;
 
+  @HiveField(15)
+  double? totalPaid;
+
+  @HiveField(16)
+  double? remainingPrincipal;
+
+  @HiveField(17)
+  double? totalAccruedInterest;
+
   Entry({
     this.id,
     required this.srNumber,
@@ -70,7 +79,21 @@ class Entry extends HiveObject {
     this.syncId,
     this.dueDate,
     this.version = 1,
+    this.totalPaid,
+    this.remainingPrincipal,
+    this.totalAccruedInterest,
   });
+
+  // ─── Safe non-nullable accessors (backward-compatible) ──────────────────
+  /// Total paid so far. Returns 0 for old records that predate this field.
+  double get effectiveTotalPaid => totalPaid ?? 0.0;
+
+  /// Remaining principal. Falls back to original amount for old records.
+  double get effectiveRemainingPrincipal =>
+      remainingPrincipal ?? (double.tryParse(amount) ?? 0.0);
+
+  /// Accrued interest. Returns 0 for old records.
+  double get effectiveTotalAccruedInterest => totalAccruedInterest ?? 0.0;
 
   factory Entry.fromJson(Map<String, dynamic> json) {
     return Entry(
@@ -89,6 +112,10 @@ class Entry extends HiveObject {
       syncId:      json['sync_id'],
       dueDate:     json['due_date'],
       version:     (json['version'] as int?) ?? 1,
+      totalPaid:   (json['total_paid'] as num?)?.toDouble(),
+      remainingPrincipal: (json['remaining_principal'] as num?)?.toDouble()
+          ?? (double.tryParse(json['amount'].toString()) ?? 0.0),
+      totalAccruedInterest: (json['total_accrued_interest'] as num?)?.toDouble(),
     );
   }
 
