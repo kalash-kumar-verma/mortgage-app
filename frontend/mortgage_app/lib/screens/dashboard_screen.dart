@@ -8,6 +8,7 @@ import 'entry_detail_screen.dart';
 import 'sync_diagnostics_screen.dart';
 import 'filtered_entry_list_screen.dart';
 import 'party_screen.dart';
+import 'reports_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -406,6 +407,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         actions: [
           _connectivityChip(),
+          IconButton(
+            icon: const Icon(Icons.analytics_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportsScreen())),
+            tooltip: 'Reports & Analytics',
+          ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
