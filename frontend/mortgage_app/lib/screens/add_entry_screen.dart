@@ -14,15 +14,15 @@ class AddEntryScreen extends StatefulWidget {
 }
 
 class _AddEntryScreenState extends State<AddEntryScreen> {
-  final _amountController = TextEditingController();
+  final _amountController   = TextEditingController();
   final _interestController = TextEditingController();
-  final _noteController = TextEditingController();
+  final _noteController     = TextEditingController();
+  DateTime? _selectedDueDate;
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
-    // Auto-fill interest rate: Party custom rate -> Global default
     if (widget.party.defaultInterestRate != null) {
       _interestController.text = widget.party.defaultInterestRate.toString();
     } else {
@@ -38,19 +38,33 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
     super.dispose();
   }
 
+  Future<void> _pickDueDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDueDate ?? now.add(const Duration(days: 30)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 5)),
+      helpText: 'Select Due Date (Optional)',
+    );
+    if (picked != null) setState(() => _selectedDueDate = picked);
+  }
+
+  void _clearDueDate() => setState(() => _selectedDueDate = null);
+
+  String _formatDate(DateTime dt) =>
+      '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+
   Future<void> _save() async {
     if (_amountController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Amount is required')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Amount is required')));
       return;
     }
-
     setState(() => _loading = true);
-
     try {
-      // Calculate the next sequential SR number based on existing local entries
       int maxSr = 0;
       for (var entry in LocalDbService.entryBox.values) {
-        // Extract digits in case there's a prefix, but user wants plain numbers like 1, 2, 3
         final strVal = entry.srNumber.replaceAll(RegExp(r'[^0-9]'), '');
         final num = int.tryParse(strVal) ?? 0;
         if (num > maxSr) maxSr = num;
@@ -58,30 +72,24 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
       final localSr = 'SR no: ${maxSr + 1}';
       final uniqueNegativeId = -(DateTime.now().millisecondsSinceEpoch % 1000000000);
       final e = Entry(
-        id: uniqueNegativeId,
-        syncId: const Uuid().v4(),
-        srNumber: localSr,
-        party: widget.party.id ?? -1,
-        amount: _amountController.text,
-        interest: _interestController.text.isEmpty ? '0' : _interestController.text,
-        status: 'ACTIVE',
-        date: DateTime.now().toIso8601String().split('T')[0],
+        id:          uniqueNegativeId,
+        syncId:      const Uuid().v4(),
+        srNumber:    localSr,
+        party:       widget.party.id ?? -1,
+        amount:      _amountController.text,
+        interest:    _interestController.text.isEmpty ? '0' : _interestController.text,
+        status:      'ACTIVE',
+        date:        DateTime.now().toIso8601String().split('T')[0],
         totalPayable: double.tryParse(_amountController.text) ?? 0.0,
         daysElapsed: 0,
-        partyName: widget.party.name,
-        note: _noteController.text,
+        partyName:   widget.party.name,
+        note:        _noteController.text,
+        dueDate:     _selectedDueDate?.toIso8601String().split('T')[0],
       );
-      
-      // Instantly save to local database (this will also queue the sync operation)
-      // Pass the party's syncId so SyncManager can resolve the parent if it's also pending.
       await LocalDbService.saveEntry(e, partySyncId: widget.party.syncId);
-      
       if (mounted) Navigator.pop(context, true);
-
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -89,51 +97,118 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('New Entry')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ListView(
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          // Party chip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(children: [
+              Icon(Icons.person, color: scheme.primary, size: 20),
+              const SizedBox(width: 10),
+              Text(widget.party.name,
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: scheme.primary)),
+            ]),
+          ),
+          const SizedBox(height: 20),
+
+          // Amount
+          TextField(
+            controller: _amountController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Amount (₹) *',
+              prefixIcon: Icon(Icons.currency_rupee),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Interest
+          TextField(
+            controller: _interestController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Interest Rate (%)',
+              prefixIcon: Icon(Icons.percent),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Due date picker
+          _buildDueDateTile(scheme),
+          const SizedBox(height: 16),
+
+          // Note
+          TextField(
+            controller: _noteController,
+            decoration: const InputDecoration(
+              labelText: 'Note (Optional)',
+              prefixIcon: Icon(Icons.notes),
+            ),
+            maxLines: 3,
+          ),
+          const SizedBox(height: 28),
+
+          ElevatedButton(
+            onPressed: _loading ? null : _save,
+            style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+            child: _loading
+                ? const SizedBox(height: 20, width: 20,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text('Create Entry', style: TextStyle(fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDueDateTile(ColorScheme scheme) {
+    return InkWell(
+      onTap: _pickDueDate,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          border: Border.all(color: scheme.outline),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF5C35D4).withOpacity(0.08),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
+            Icon(Icons.calendar_today_outlined,
+                color: _selectedDueDate != null ? scheme.primary : Colors.grey, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.person, color: Color(0xFF5C35D4)),
-                  const SizedBox(width: 8),
-                  Text(widget.party.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text('Due Date',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: _selectedDueDate != null ? scheme.primary : Colors.grey[600])),
+                  const SizedBox(height: 2),
+                  Text(
+                    _selectedDueDate != null
+                        ? _formatDate(_selectedDueDate!)
+                        : 'Optional — tap to set a deadline',
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: _selectedDueDate != null ? scheme.onSurface : Colors.grey[500]),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Amount (₹) *', prefixIcon: Icon(Icons.currency_rupee)),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _interestController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Interest Rate (%)', prefixIcon: Icon(Icons.percent)),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _noteController,
-              decoration: const InputDecoration(labelText: 'Note (Optional)', prefixIcon: Icon(Icons.notes)),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _loading ? null : _save,
-              child: _loading 
-                  ? const CircularProgressIndicator(color: Colors.white) 
-                  : const Text('Create Entry'),
-            ),
+            if (_selectedDueDate != null)
+              GestureDetector(
+                onTap: _clearDueDate,
+                child: Icon(Icons.close, size: 18, color: Colors.grey[600]),
+              ),
           ],
         ),
       ),

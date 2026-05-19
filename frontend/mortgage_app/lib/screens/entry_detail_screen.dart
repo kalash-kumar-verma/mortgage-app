@@ -182,6 +182,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   _row('Days Elapsed', '${_entry.computedDaysElapsed} days'),
                   _row('Total Payable', '₹${_entry.computedTotalPayable.toStringAsFixed(2)}', highlight: true),
                   if (_entry.closedAt != null) _row('Closed On', _entry.closedAt!),
+                  // Due date row
+                  _dueDateRow(),
                   if (_entry.note.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Container(
@@ -290,6 +292,71 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                     : null,
               ),
             ))),
+        ],
+      ),
+    );
+  }
+
+  Widget _dueDateRow() {
+    final dueDate = _entry.parsedDueDate;
+    final isClosed = _entry.status == 'WITHDRAWN' || _entry.status == 'CLOSED';
+
+    if (dueDate == null) {
+      // No due date — show soft hint only when editable
+      if (!_canEdit) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Due Date', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+            Text('No deadline set', style: TextStyle(color: Colors.grey[400], fontSize: 13, fontStyle: FontStyle.italic)),
+          ],
+        ),
+      );
+    }
+
+    final daysLeft = _entry.daysUntilDue;
+    Color badgeColor;
+    String badgeText;
+    if (isClosed || daysLeft == null) {
+      badgeColor = Colors.grey;
+      badgeText  = _entry.dueDateDisplay;
+    } else if (daysLeft < 0) {
+      badgeColor = Colors.red;
+      badgeText  = 'Overdue by ${daysLeft.abs()} day${daysLeft.abs() == 1 ? '' : 's'}';
+    } else if (daysLeft == 0) {
+      badgeColor = Colors.orange;
+      badgeText  = 'Due today';
+    } else if (daysLeft <= 3) {
+      badgeColor = Colors.orange;
+      badgeText  = '$daysLeft days left';
+    } else {
+      badgeColor = Colors.green[700]!;
+      badgeText  = '$daysLeft days left';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(children: [
+            Icon(Icons.calendar_today_outlined, size: 14, color: Colors.grey[600]),
+            const SizedBox(width: 6),
+            Text('Due Date', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+          ]),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            decoration: BoxDecoration(
+              color: badgeColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '${_entry.dueDateDisplay}  ·  $badgeText',
+              style: TextStyle(fontSize: 12, color: badgeColor, fontWeight: FontWeight.w600),
+            ),
+          ),
         ],
       ),
     );

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
@@ -5,6 +6,8 @@ import '../services/sync_manager.dart';
 import '../models/entry.dart';
 import 'entry_detail_screen.dart';
 import 'sync_diagnostics_screen.dart';
+import 'filtered_entry_list_screen.dart';
+import 'party_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -17,17 +20,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _stats;
   List<Entry> _recentEntries = [];
   bool _loading = true;
+  StreamSubscription? _entrySub;
+  StreamSubscription? _partySub;
 
   @override
   void initState() {
     super.initState();
     _load();
     SyncManager().isSyncingNotifier.addListener(_onSyncStatusChanged);
+    // Live refresh when local Hive boxes change (after create/edit/delete)
+    _entrySub = LocalDbService.entryBox.watch().listen((_) => _loadSilently());
+    _partySub = LocalDbService.partyBox.watch().listen((_) => _loadSilently());
   }
 
   @override
   void dispose() {
     SyncManager().isSyncingNotifier.removeListener(_onSyncStatusChanged);
+    _entrySub?.cancel();
+    _partySub?.cancel();
     super.dispose();
   }
 
@@ -87,28 +97,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required String value,
     required Color color,
     required IconData icon,
+    VoidCallback? onTap,
   }) {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: color, size: 20),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color),
-            ),
-          ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color, size: 20),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                  ),
+                  if (onTap != null) ...[const Spacer(), Icon(Icons.chevron_right, size: 14, color: Colors.grey[400])],
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -428,36 +444,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               value: '${_stats!['total_parties']}',
                               color: const Color(0xFF5C35D4),
                               icon: Icons.people,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PartyScreen())),
                             ),
                             _statCard(
                               label: 'Total Entries',
                               value: '${_stats!['total_entries']}',
                               color: Colors.blueGrey,
                               icon: Icons.receipt_long,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FilteredEntryListScreen(title: 'All Entries'))),
                             ),
                             _statCard(
                               label: 'Active',
                               value: '${_stats!['active']}',
                               color: Colors.green[700]!,
                               icon: Icons.check_circle_outline,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FilteredEntryListScreen(title: 'Active Entries', statusFilter: 'ACTIVE'))),
                             ),
                             _statCard(
                               label: 'Overdue',
                               value: '${_stats!['overdue']}',
                               color: Colors.orange[700]!,
                               icon: Icons.warning_amber_outlined,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FilteredEntryListScreen(title: 'Overdue Entries', statusFilter: 'OVERDUE'))),
                             ),
                             _statCard(
                               label: 'Withdrawn',
                               value: '${_stats!['withdrawn']}',
                               color: Colors.blue[700]!,
                               icon: Icons.undo,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FilteredEntryListScreen(title: 'Withdrawn Entries', statusFilter: 'WITHDRAWN'))),
                             ),
                             _statCard(
                               label: 'Closed',
                               value: '${_stats!['closed']}',
                               color: Colors.grey[600]!,
                               icon: Icons.lock_outline,
+                              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FilteredEntryListScreen(title: 'Closed Entries', statusFilter: 'CLOSED'))),
                             ),
                           ],
                         ),

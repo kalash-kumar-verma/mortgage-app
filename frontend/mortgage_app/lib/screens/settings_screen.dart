@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../services/settings_service.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
@@ -8,6 +9,7 @@ import '../models/business_setting.dart';
 import '../models/sync_action.dart';
 import 'login_screen.dart';
 import 'sync_diagnostics_screen.dart';
+import 'recycle_bin_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -17,104 +19,68 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _apiUrlController = TextEditingController(text: SettingsService.apiBaseUrl);
-  final _businessNameController = TextEditingController(text: SettingsService.businessName);
-  final _pinController = TextEditingController(text: SettingsService.withdrawPin);
-  
-  bool _loading = true;
-  bool _saving = false;
+  bool _loadingBusiness = true;
+  bool _settingsOffline = false;
   BusinessSetting? _businessSetting;
-  
-  // Local state for backend settings
-  bool _strictMode = false;
+
+  // Business rule state
+  bool _strictMode   = false;
   bool _fiveDayLogic = false;
-  final _gracePeriodController = TextEditingController();
+  int  _gracePeriod  = 5;
+
+  String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
     _loadBackendSettings();
+    _loadPackageInfo();
   }
 
-  bool _settingsOffline = false;
+  Future<void> _loadPackageInfo() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+    } catch (_) {
+      if (mounted) setState(() => _appVersion = 'v1.0.0');
+    }
+  }
 
   Future<void> _loadBackendSettings() async {
     try {
-      final setting = await ApiService().fetchBusinessSettings()
-          .timeout(const Duration(seconds: 5));
+      final setting = await ApiService()
+          .fetchBusinessSettings()
+          .timeout(const Duration(seconds: 6));
       if (mounted) {
         setState(() {
           _businessSetting = setting;
-          _strictMode = setting.strictMode;
-          _fiveDayLogic = setting.fiveDayLogic;
-          _gracePeriodController.text = setting.gracePeriodDays.toString();
-          _loading = false;
+          _strictMode      = setting.strictMode;
+          _fiveDayLogic    = setting.fiveDayLogic;
+          _gracePeriod     = setting.gracePeriodDays;
+          _loadingBusiness = false;
           _settingsOffline = false;
         });
       }
+    } catch (_) {
+      if (mounted) setState(() { _loadingBusiness = false; _settingsOffline = true; });
+    }
+  }
+
+  Future<void> _saveBusinessSettings() async {
+    if (_businessSetting == null) return;
+    try {
+      final updated = BusinessSetting(
+        id: _businessSetting!.id,
+        strictMode: _strictMode,
+        fiveDayLogic: _fiveDayLogic,
+        gracePeriodDays: _gracePeriod,
+      );
+      await LocalDbService.saveBusinessSetting(updated);
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _loading = false;
-          _settingsOffline = true; // Show offline notice in UI
-        });
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to save: $e')));
       }
-    }
-  }
-
-  @override
-  void dispose() {
-    _apiUrlController.dispose();
-    _businessNameController.dispose();
-    _pinController.dispose();
-    _gracePeriodController.dispose();
-    super.dispose();
-  }
-
-  Widget _queueStat(String label, int count, Color color) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8, height: 8,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 4),
-        Text('$count $label', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-      ],
-    );
-  }
-
-  Future<void> _saveSettings() async {
-    setState(() => _saving = true);
-    
-    // Save local Hive settings
-    SettingsService.setApiBaseUrl(_apiUrlController.text);
-    SettingsService.setBusinessName(_businessNameController.text);
-    SettingsService.setWithdrawPin(_pinController.text);
-    
-    // Save Backend Business Settings if loaded
-    if (_businessSetting != null) {
-      try {
-        final newSetting = BusinessSetting(
-          id: _businessSetting!.id,
-          strictMode: _strictMode,
-          fiveDayLogic: _fiveDayLogic,
-          gracePeriodDays: int.tryParse(_gracePeriodController.text) ?? 5,
-        );
-        await LocalDbService.saveBusinessSetting(newSetting);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save business settings: $e')));
-        }
-      }
-    }
-    
-    if (mounted) {
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved successfully!')),
-      );
     }
   }
 
@@ -122,16 +88,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Clear Pending Sync Queue'),
+        title: const Text('Clear Sync Queue'),
         content: const Text(
-          'This will permanently delete all pending offline changes that have not been synced to the server.\n\n'
-          'Use this only if you want to discard old queued actions. Recent offline data in your app will NOT be deleted.',
-        ),
+            'Permanently deletes all pending offline changes that have not synced.\n\n'
+            'Use only if you want to discard queued actions.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Clear Queue', style: TextStyle(color: Colors.red)),
+            child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -140,258 +105,544 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final box = Hive.box<SyncAction>(LocalDbService.syncBoxName);
     await box.clear();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sync queue cleared. Fresh actions will sync normally.')),
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Sync queue cleared.')));
+    }
+  }
+
+  Future<void> _logout() async {
+    SyncManager().dispose();
+    await LocalDbService.closeUserBoxes();
+    await SettingsService.setToken(null);
+    await SettingsService.setUsername(null);
+    LocalDbService.setUserNamespace('');
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
       );
     }
   }
 
+  Future<void> _logoutAllDevices() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Logout All Devices'),
+        content: const Text('This will log out all other devices immediately.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Logout All', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await ApiService().logoutAllDevices();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('All other devices logged out.')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  // ─── Build helpers ────────────────────────────────────────────────
+
+  Widget _section(String title) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
+        child: Text(
+          title.toUpperCase(),
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+      );
+
+  Widget _tile({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    VoidCallback? onTap,
+    Color? iconColor,
+    Color? titleColor,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardTheme.color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: (iconColor ?? scheme.primary).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 18, color: iconColor ?? scheme.primary),
+        ),
+        title: Text(title,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: titleColor)),
+        subtitle: subtitle != null
+            ? Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[500]))
+            : null,
+        trailing: trailing ??
+            (onTap != null
+                ? Icon(Icons.chevron_right, color: Colors.grey[400], size: 18)
+                : null),
+        onTap: onTap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  Widget _dividerTile() => const SizedBox(height: 2);
+
+  // ─── Profile card ─────────────────────────────────────────────────
+
+  Widget _profileCard() {
+    final username     = SettingsService.username ?? 'User';
+    final businessName = SettingsService.businessName;
+    final initials     = username.isNotEmpty ? username[0].toUpperCase() : 'U';
+    final scheme       = Theme.of(context).colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [scheme.primary, scheme.primary.withValues(alpha: 0.7)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 30,
+            backgroundColor: Colors.white.withValues(alpha: 0.25),
+            child: Text(initials,
+                style: const TextStyle(
+                    fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(username,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17)),
+                const SizedBox(height: 2),
+                Text(businessName,
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.8), fontSize: 13)),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: _editProfileDialog,
+            icon: const Icon(Icons.edit_outlined, color: Colors.white, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editProfileDialog() async {
+    final businessCtrl = TextEditingController(text: SettingsService.businessName);
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit Profile'),
+        content: TextField(
+          controller: businessCtrl,
+          decoration: const InputDecoration(labelText: 'Business Name'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              await SettingsService.setBusinessName(businessCtrl.text.trim());
+              if (mounted) { setState(() {}); Navigator.pop(context); }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editInterestRateDialog() async {
+    final ctrl = TextEditingController(text: SettingsService.defaultInterest);
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Default Interest Rate'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Rate (%)', suffixText: '%'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              await SettingsService.setDefaultInterest(ctrl.text.trim());
+              if (mounted) { setState(() {}); Navigator.pop(context); }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editPinDialog() async {
+    final ctrl = TextEditingController(text: SettingsService.withdrawPin);
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Withdrawal PIN'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          maxLength: 6,
+          decoration: const InputDecoration(labelText: '4–6 digit PIN'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (ctrl.text.trim().length < 4) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('PIN must be at least 4 digits')));
+                return;
+              }
+              await SettingsService.setWithdrawPin(ctrl.text.trim());
+              if (mounted) { setState(() {}); Navigator.pop(context); }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editApiUrlDialog() async {
+    final ctrl = TextEditingController(text: SettingsService.apiBaseUrl);
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('API Base URL'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+              labelText: 'URL', helperText: 'e.g. https://yourapp.onrender.com/api'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              await SettingsService.setApiBaseUrl(ctrl.text.trim());
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editGracePeriodDialog() async {
+    final ctrl = TextEditingController(text: _gracePeriod.toString());
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Grace Period'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Days', helperText: 'Extra days before charging next month'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final v = int.tryParse(ctrl.text.trim()) ?? 5;
+              setState(() => _gracePeriod = v);
+              await _saveBusinessSettings();
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
         children: [
-          // Interest Business Rules (Backend)
-          if (_loading)
-            const Center(child: CircularProgressIndicator())
+
+          // ── Profile ──────────────────────────────────────────────
+          _profileCard(),
+
+          // ── General ──────────────────────────────────────────────
+          _section('General'),
+          _tile(
+            icon: Icons.dark_mode_outlined,
+            title: 'Dark Mode',
+            trailing: ValueListenableBuilder<bool>(
+              valueListenable: SettingsService.darkModeNotifier,
+              builder: (_, isDark, __) => Switch(
+                value: isDark,
+                onChanged: (v) => SettingsService.setDarkMode(v),
+              ),
+            ),
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.percent_outlined,
+            title: 'Default Interest Rate',
+            subtitle: '${SettingsService.defaultInterest}% per month',
+            onTap: _editInterestRateDialog,
+          ),
+
+          // ── Business Rules ────────────────────────────────────────
+          _section('Business Rules'),
+          if (_loadingBusiness)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Center(child: CircularProgressIndicator()),
+            )
           else if (_settingsOffline)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    const Icon(Icons.cloud_off, size: 40, color: Colors.grey),
-                    const SizedBox(height: 8),
-                    const Text('Business Rules unavailable offline', style: TextStyle(color: Colors.grey)),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        setState(() { _loading = true; _settingsOffline = false; });
-                        _loadBackendSettings();
-                      },
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Retry'),
-                    ),
-                  ],
-                ),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_off, color: Colors.orange[700], size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('Unavailable offline',
+                        style: TextStyle(color: Colors.orange[700], fontSize: 13)),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() { _loadingBusiness = true; _settingsOffline = false; });
+                      _loadBackendSettings();
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ],
               ),
             )
-          else if (_businessSetting != null)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Interest Calculation Rules', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
-                    SwitchListTile(
-                      title: const Text('Strict Mode (Exact Days)'),
-                      subtitle: const Text('Calculates exact interest per day instead of per month.'),
-                      value: _strictMode,
-                      onChanged: (v) => setState(() => _strictMode = v),
-                    ),
-                    SwitchListTile(
-                      title: const Text('5-Day Logic'),
-                      subtitle: const Text('If withdrawn within 5 days of start, charge 0 interest.'),
-                      value: _fiveDayLogic,
-                      onChanged: (v) => setState(() => _fiveDayLogic = v),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _gracePeriodController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Grace Period (Days)',
-                        helperText: 'Number of extra days allowed before charging next month.',
-                      ),
-                    ),
-                  ],
-                ),
+          else ...[
+            _tile(
+              icon: Icons.calculate_outlined,
+              title: 'Strict Mode',
+              subtitle: 'Exact daily interest calculation',
+              trailing: Switch(
+                value: _strictMode,
+                onChanged: (v) {
+                  setState(() => _strictMode = v);
+                  _saveBusinessSettings();
+                },
               ),
             ),
-          const SizedBox(height: 16),
-          // App Settings (Local)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('General Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _businessNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Business Name',
-                      helperText: 'Displayed on the dashboard',
-                    ),
-                  ),
-                ],
+            _dividerTile(),
+            _tile(
+              icon: Icons.timer_outlined,
+              title: '5-Day Logic',
+              subtitle: 'No interest if withdrawn within 5 days',
+              trailing: Switch(
+                value: _fiveDayLogic,
+                onChanged: (v) {
+                  setState(() => _fiveDayLogic = v);
+                  _saveBusinessSettings();
+                },
               ),
             ),
+            _dividerTile(),
+            _tile(
+              icon: Icons.date_range_outlined,
+              title: 'Grace Period',
+              subtitle: '$_gracePeriod days',
+              onTap: _editGracePeriodDialog,
+            ),
+          ],
+
+          // ── Security ──────────────────────────────────────────────
+          _section('Security'),
+          _tile(
+            icon: Icons.lock_outlined,
+            title: 'Withdrawal PIN',
+            subtitle: '●●●●',
+            onTap: _editPinDialog,
           ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Security', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _pinController,
-                    keyboardType: TextInputType.number,
-                    obscureText: true,
-                    maxLength: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Withdrawal PIN',
-                      helperText: '4-digit PIN required to withdraw entries',
-                    ),
-                  ),
-                ],
+          _dividerTile(),
+          _tile(
+            icon: Icons.phonelink_lock_outlined,
+            title: 'App Lock',
+            subtitle: 'Coming soon',
+            iconColor: Colors.grey,
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
               ),
+              child: const Text('Soon', style: TextStyle(fontSize: 11, color: Colors.grey)),
             ),
           ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Advanced', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _apiUrlController,
-                    decoration: const InputDecoration(
-                      labelText: 'API Base URL',
-                      helperText: 'e.g., http://192.168.1.100:8000/api',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // Sync queue status
-                  ValueListenableBuilder<int>(
-                    valueListenable: SyncManager().pendingCountNotifier,
-                    builder: (context, count, _) {
-                      final stats = SyncManager().getQueueStats();
-                      return Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[50],
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[200]!),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Sync Queue',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                            const SizedBox(height: 8),
-                            Row(children: [
-                              _queueStat('Pending', stats['pending'] ?? 0, Colors.blue),
-                              const SizedBox(width: 12),
-                              _queueStat('Failed', stats['failed'] ?? 0, Colors.orange),
-                              const SizedBox(width: 12),
-                              _queueStat('Abandoned', stats['abandoned'] ?? 0, Colors.red),
-                            ]),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: () => SyncManager().performFullSync(),
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Force Sync Now'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const SyncDiagnosticsScreen()),
-                    ),
-                    icon: const Icon(Icons.bug_report_outlined),
-                    label: const Text('Open Sync Diagnostics'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                    onPressed: _clearSyncQueue,
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Clear Pending Sync Queue'),
-                  ),
-                ],
-              ),
-            ),
+
+          // ── Data & Sync ───────────────────────────────────────────
+          _section('Data & Sync'),
+          _tile(
+            icon: Icons.delete_sweep_outlined,
+            title: 'Recycle Bin',
+            subtitle: 'View deleted records',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RecycleBinScreen())),
           ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: _saving ? null : _saveSettings,
-            icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.save),
-            label: const Text('Save Settings'),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              backgroundColor: const Color(0xFF5C35D4),
-            ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.bug_report_outlined,
+            title: 'Sync Diagnostics',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncDiagnosticsScreen())),
           ),
-          const SizedBox(height: 16),
-          TextButton.icon(
-            onPressed: () async {
-              // Proper logout: stop sync, close user boxes, clear credentials
-              SyncManager().dispose();
-              await LocalDbService.closeUserBoxes();
-              await SettingsService.setToken(null);
-              await SettingsService.setUsername(null);
-              LocalDbService.setUserNamespace('');
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (route) => false,
-                );
-              }
+          _dividerTile(),
+          _tile(
+            icon: Icons.sync_outlined,
+            title: 'Force Sync Now',
+            onTap: () {
+              SyncManager().performFullSync();
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Sync started…')));
             },
-            icon: const Icon(Icons.logout, color: Colors.red),
-            label: const Text('Logout', style: TextStyle(color: Colors.red)),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+          _dividerTile(),
+          ValueListenableBuilder<int>(
+            valueListenable: SyncManager().pendingCountNotifier,
+            builder: (_, count, __) => _tile(
+              icon: Icons.cloud_upload_outlined,
+              title: 'Pending Queue',
+              subtitle: count == 0 ? 'All synced' : '$count operation${count == 1 ? '' : 's'} pending',
+              trailing: count > 0
+                  ? TextButton(
+                      onPressed: _clearSyncQueue,
+                      child: const Text('Clear', style: TextStyle(color: Colors.red)),
+                    )
+                  : Icon(Icons.check_circle_outline, color: Colors.green[700], size: 20),
             ),
           ),
-          const Divider(),
-          TextButton.icon(
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Logout All Devices'),
-                  content: const Text('This will log out all other devices immediately.'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Logout All', style: TextStyle(color: Colors.red)),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm != true) return;
-              try {
-                await ApiService().logoutAllDevices();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('All other devices logged out.')));
-                }
-              } catch (e) {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
-              }
-            },
-            icon: const Icon(Icons.phonelink_erase, color: Colors.red),
-            label: const Text('Logout from all other devices', style: TextStyle(color: Colors.red)),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+          _dividerTile(),
+          _tile(
+            icon: Icons.settings_ethernet_outlined,
+            title: 'API Base URL',
+            subtitle: SettingsService.apiBaseUrl,
+            onTap: _editApiUrlDialog,
+          ),
+
+          // ── Account ───────────────────────────────────────────────
+          _section('Account'),
+          _tile(
+            icon: Icons.logout,
+            title: 'Logout',
+            iconColor: Colors.red[400],
+            titleColor: Colors.red[400],
+            onTap: _logout,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.phonelink_erase_outlined,
+            title: 'Logout All Devices',
+            iconColor: Colors.red[300],
+            titleColor: Colors.red[300],
+            onTap: _logoutAllDevices,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.person_remove_outlined,
+            title: 'Delete Account',
+            subtitle: 'Coming soon',
+            iconColor: Colors.grey,
+            titleColor: Colors.grey,
+          ),
+
+          // ── About ─────────────────────────────────────────────────
+          _section('About'),
+          _tile(
+            icon: Icons.info_outlined,
+            title: 'App Version',
+            subtitle: _appVersion.isEmpty ? 'Loading…' : _appVersion,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.help_outline,
+            title: 'Help & Support',
+            subtitle: 'Coming soon',
+            iconColor: Colors.grey,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.share_outlined,
+            title: 'Invite Friends',
+            subtitle: 'Coming soon',
+            iconColor: Colors.grey,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.system_update_outlined,
+            title: 'Check for Updates',
+            subtitle: 'Coming soon',
+            iconColor: Colors.grey,
+          ),
+          _dividerTile(),
+          _tile(
+            icon: Icons.diamond_outlined,
+            title: 'About Jewellery Mortgage',
+            subtitle: 'Offline-first mortgage management',
+            iconColor: scheme.primary,
+          ),
+
+          const SizedBox(height: 16),
+          Center(
+            child: Text(
+              'Made with ♥ for jewellery businesses',
+              style: TextStyle(fontSize: 12, color: Colors.grey[400]),
             ),
           ),
         ],
