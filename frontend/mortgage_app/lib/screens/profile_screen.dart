@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/settings_service.dart';
+import '../services/local_db_service.dart';
 import 'login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -64,6 +65,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
       
       await SettingsService.setUsername(updatedData['username'] ?? '');
+
+      await LocalDbService.logActivity(
+        action: 'PROFILE',
+        entityType: 'PROFILE',
+        description: 'Profile details updated',
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated successfully')));

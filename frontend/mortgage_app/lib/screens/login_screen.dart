@@ -22,6 +22,13 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
 
   Future<void> _login() async {
+    final lockUntil = SettingsService.loginLockUntil;
+    if (lockUntil != null && DateTime.now().isBefore(lockUntil)) {
+      final diff = lockUntil.difference(DateTime.now()).inMinutes;
+      setState(() => _error = 'Too many failed attempts. Try again in ${diff + 1} minutes.');
+      return;
+    }
+
     setState(() { _loading = true; _error = null; });
     final baseUrl = SettingsService.apiBaseUrl;
 
@@ -36,6 +43,10 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (response.statusCode == 200) {
+        // Reset throttling
+        await SettingsService.setFailedLoginAttempts(0);
+        await SettingsService.setLoginLockUntil(null);
+
         final data  = jsonDecode(response.body);
         final token = data['token'] as String;
         final username = _usernameController.text.trim();
@@ -59,7 +70,15 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       } else {
-        setState(() => _error = 'Invalid username or password');
+        int attempts = SettingsService.failedLoginAttempts + 1;
+        await SettingsService.setFailedLoginAttempts(attempts);
+        
+        if (attempts >= 5) {
+          await SettingsService.setLoginLockUntil(DateTime.now().add(const Duration(minutes: 5)));
+          setState(() => _error = 'Too many failed attempts. Try again in 5 minutes.');
+        } else {
+          setState(() => _error = 'Invalid username or password (${5 - attempts} attempts left)');
+        }
       }
     } catch (e) {
       setState(() => _error = 'Network error: Please check server URL and connection');

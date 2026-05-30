@@ -31,6 +31,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int  _gracePeriod  = 5;
 
   String _appVersion = '';
+  
+  bool _appLockEnabled = SettingsService.appLockEnabled;
+  int _inactivityTimeout = SettingsService.inactivityTimeout;
 
   @override
   void initState() {
@@ -501,17 +504,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _tile(
             icon: Icons.phonelink_lock_outlined,
             title: 'App Lock',
-            subtitle: 'Coming soon',
-            iconColor: Colors.grey,
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.grey.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text('Soon', style: TextStyle(fontSize: 11, color: Colors.grey)),
+            subtitle: 'Require PIN to unlock',
+            trailing: Switch(
+              value: _appLockEnabled,
+              onChanged: (v) {
+                setState(() => _appLockEnabled = v);
+                SettingsService.setAppLockEnabled(v);
+              },
             ),
           ),
+          if (_appLockEnabled) ...[
+            _dividerTile(),
+            _tile(
+              icon: Icons.timer_outlined,
+              title: 'Auto-lock timeout',
+              trailing: DropdownButton<int>(
+                value: _inactivityTimeout,
+                underline: const SizedBox(),
+                items: const [
+                  DropdownMenuItem(value: 30, child: Text('30 sec')),
+                  DropdownMenuItem(value: 60, child: Text('1 min')),
+                  DropdownMenuItem(value: 300, child: Text('5 min')),
+                  DropdownMenuItem(value: 600, child: Text('10 min')),
+                ],
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() => _inactivityTimeout = val);
+                    SettingsService.setInactivityTimeout(val);
+                  }
+                },
+              ),
+            ),
+          ],
 
           // ── Data & Sync ───────────────────────────────────────────
           _section('Data & Sync'),
