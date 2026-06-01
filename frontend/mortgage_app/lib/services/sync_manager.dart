@@ -488,10 +488,22 @@ class SyncManager {
   ///   - Server MISSING record, local EXISTS, no pending op → DELETE locally (another device deleted it)
   Future<void> _smartPullSync() async {
     try {
-      // Build set of syncIds that have pending queue ops — don't delete unsynced local records
+      // Build set of syncIds/serverIds that have pending queue ops.
+      // This protects two classes of records from being overwritten by pull:
+      //   A) Records not yet synced: identified by UUID in payload (sync_id) or endpoint.
+      //   B) Records already synced but with a pending edit/delete: identified by
+      //      integer server ID in endpoint (e.g. "entries/42/", "parties/7/").
       final pendingSyncIds = <String>{};
+      // Regex for UUID (class A — unsynced records)
+      final uuidRx = RegExp(
+          r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
+      // Regex for integer server IDs in endpoints like "entries/42/" (class B)
+      final intIdRx = RegExp(r'(?:parties|entries|items|payments)/(\d+)(?:/|$)');
+
       for (final action in LocalDbService.syncBox.values) {
         if (action.isAbandoned) continue;
+
+        // ── Class A: extract sync_id / party_sync_id / entry_sync_id from payload ──
         if (action.payload != null) {
           try {
             final m = jsonDecode(action.payload!) as Map<String, dynamic>;
@@ -501,9 +513,16 @@ class SyncManager {
             }
           } catch (_) {}
         }
-        final uuidRx = RegExp(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
-        final match = uuidRx.firstMatch(action.endpoint);
-        if (match != null) pendingSyncIds.add(match.group(0)!);
+
+        // ── Class A: UUID in endpoint (e.g. "entries/{uuid}/withdraw/") ──
+        final uuidMatch = uuidRx.firstMatch(action.endpoint);
+        if (uuidMatch != null) pendingSyncIds.add(uuidMatch.group(0)!);
+
+        // ── Class B: integer server ID in endpoint (e.g. "entries/42/") ──
+        // Stored as the string representation so downstream comparisons work:
+        //   hasPendingOp = pendingSyncIds.contains(localEntry.id.toString())
+        final intMatch = intIdRx.firstMatch(action.endpoint);
+        if (intMatch != null) pendingSyncIds.add(intMatch.group(1)!);
       }
 
       final serverParties = await ApiService().fetchParties();
