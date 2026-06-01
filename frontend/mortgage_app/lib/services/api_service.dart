@@ -32,8 +32,12 @@ class ApiService {
   }
 
   // ─── Activity Logs ──────────────────────────────────────────
-  Future<List<ActivityLog>> fetchActivities() async {
-    final response = await http.get(Uri.parse('$baseUrl/activities/'), headers: _headers);
+  Future<List<ActivityLog>> fetchActivities({String? since}) async {
+    String url = '$baseUrl/activities/';
+    if (since != null) {
+      url += '?since=${Uri.encodeQueryComponent(since)}';
+    }
+    final response = await http.get(Uri.parse(url), headers: _headers);
     if (response.statusCode == 200) {
       final List data = jsonDecode(response.body);
       return data.map((json) => ActivityLog.fromJson(json)).toList();

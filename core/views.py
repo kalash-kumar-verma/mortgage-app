@@ -418,7 +418,11 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Users can only see their own activities
-        return ActivityLog.objects.filter(user=self.request.user).order_by('-timestamp')
+        qs = ActivityLog.objects.filter(user=self.request.user).order_by('-timestamp')
+        since = self.request.query_params.get('since')
+        if since:
+            qs = qs.filter(timestamp__gte=since)
+        return qs
 
     @transaction.atomic
     def perform_create(self, serializer):

@@ -21,6 +21,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _stats;
   List<Entry> _recentEntries = [];
   bool _loading = true;
+  Timer? _debounceTimer;
   StreamSubscription? _entrySub;
   StreamSubscription? _partySub;
 
@@ -30,13 +31,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _load();
     SyncManager().isSyncingNotifier.addListener(_onSyncStatusChanged);
     // Live refresh when local Hive boxes change (after create/edit/delete)
-    _entrySub = LocalDbService.entryBox.watch().listen((_) => _loadSilently());
-    _partySub = LocalDbService.partyBox.watch().listen((_) => _loadSilently());
+    _entrySub = LocalDbService.entryBox.watch().listen((_) => _scheduleLoad());
+    _partySub = LocalDbService.partyBox.watch().listen((_) => _scheduleLoad());
   }
 
   @override
   void dispose() {
     SyncManager().isSyncingNotifier.removeListener(_onSyncStatusChanged);
+    _debounceTimer?.cancel();
     _entrySub?.cancel();
     _partySub?.cancel();
     super.dispose();
@@ -47,6 +49,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!SyncManager().isSyncingNotifier.value && mounted) {
       _loadSilently();
     }
+  }
+
+  void _scheduleLoad() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _loadSilently();
+    });
   }
 
   void _loadSilently() {

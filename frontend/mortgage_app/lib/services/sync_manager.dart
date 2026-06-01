@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
+import 'package:hive/hive.dart';
 import '../models/sync_action.dart';
 import 'api_service.dart';
 import 'local_db_service.dart';
@@ -150,8 +151,17 @@ class SyncManager {
 
   /// Full sync cycle: push pending local changes → pull new server data.
   /// Guards against concurrent cycles with _isSyncing flag.
-  Future<void> _syncAll() async {
+  Future<void> _syncAll({bool isManual = false}) async {
     if (_isSyncing) return;
+
+    if (!isManual) {
+      final lastSync = SettingsService.lastSyncedAt;
+      final queueEmpty = LocalDbService.getPendingActions().isEmpty;
+      final dataFresh = lastSync != null && DateTime.now().difference(lastSync).inMinutes < 5;
+      if (queueEmpty && dataFresh) {
+        return; // Idle sync skip optimization
+      }
+    }
 
     // Double-check connectivity before proceeding
     final results = await Connectivity().checkConnectivity();
@@ -198,9 +208,17 @@ class SyncManager {
     final box = LocalDbService.syncBox;
 
     // Oldest-first ordering — critical for relational integrity
-    final actions = box.values.toList()
+    final allActions = box.values.toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
+    final entityActions = allActions.where((a) => !a.endpoint.startsWith('activities/')).toList();
+    final activityActions = allActions.where((a) => a.endpoint.startsWith('activities/')).toList();
+
+    await _processActionList(entityActions, box);
+    await _processActionList(activityActions, box);
+  }
+
+  Future<void> _processActionList(List<SyncAction> actions, Box<SyncAction> box) async {
     for (final action in actions) {
       // Skip: already at max retries (abandoned)
       if (action.isAbandoned) {
@@ -245,7 +263,7 @@ class SyncManager {
           }
         }
 
-        // Stop on first failure — next cycle will retry from here
+        // Stop on first failure in this list — next cycle will retry from here
         break;
       }
     }
@@ -691,8 +709,9 @@ class SyncManager {
         await LocalDbService.partyBox.delete(partySyncId);
       }
 
-      // Fetch and overwrite all Activity Logs (immutable history)
-      final serverActivities = await ApiService().fetchActivities();
+      // Fetch and overwrite new Activity Logs
+      final sinceFilter = SettingsService.lastSyncedAt?.toIso8601String();
+      final serverActivities = await ApiService().fetchActivities(since: sinceFilter);
       for (final log in serverActivities) {
         // Simple overwrite is safe since logs are immutable
         await LocalDbService.activityBox.put(log.syncId, log);
@@ -709,7 +728,7 @@ class SyncManager {
   // ─── Public API ───────────────────────────────────────────────────────────
 
   /// Trigger a full sync manually (e.g., pull-to-refresh, after login).
-  Future<void> performFullSync() => _syncAll();
+  Future<void> performFullSync() => _syncAll(isManual: true);
 
   /// Trigger pull-only sync (e.g., for read-heavy screens).
   Future<void> performFullPullSync() => _smartPullSync();
