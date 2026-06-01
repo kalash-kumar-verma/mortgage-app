@@ -241,14 +241,17 @@ class SyncManager {
         debugPrint('[SyncManager] ✓ ${action.method} ${action.endpoint}');
       } catch (e) {
         if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:'))) {
+          // 409/404 conflicts are unrecoverable (e.g. duplicate POST, stale delete).
+          // Abandon this action so it doesn't block the rest of the queue forever.
           action.status        = SyncStatus.conflict;
           action.isSyncing     = false;
-          // Note: we do NOT increment retryCount on conflict
+          action.retryCount    = SyncAction.maxRetries; // force-abandon
           action.failureReason = e.message.contains(':') ? e.message.split(':').last : 'Conflict detected';
           await action.save();
-          debugPrint('[SyncManager] ✗ Conflict on ${action.endpoint}: ${action.failureReason}');
+          debugPrint('[SyncManager] ✗ Conflict (abandoned): ${action.endpoint}: ${action.failureReason}');
+          // ⚠ Do NOT break — conflicts are unrecoverable, skip and continue the queue
         } else {
-          // ❌ Failure — record it, stop processing to preserve ordering
+          // ❌ Transient failure — record it, stop processing to preserve ordering
           action.status        = SyncStatus.failed;
           action.isSyncing     = false;
           action.retryCount    += 1;
@@ -261,10 +264,10 @@ class SyncManager {
           if (action.isAbandoned) {
             debugPrint('[SyncManager] ⚠ Action abandoned after ${SyncAction.maxRetries} retries: ${action.endpoint}');
           }
-        }
 
-        // Stop on first failure in this list — next cycle will retry from here
-        break;
+          // Stop on first transient failure in this list — next cycle will retry from here
+          break;
+        }
       }
     }
   }

@@ -32,6 +32,9 @@ class LocalDbService {
   static String get syncBoxName      => 'sync_queue_$_namespace';
   // Tombstone box is intentionally GLOBAL (shared across users for safety)
   static const String tombstoneBoxName = 'tombstones';
+  // Tombstone metadata box: stores label/type for display in Recycle Bin
+  // after the entity has been physically deleted from its data box.
+  static const String tombstoneMetaBoxName = 'tombstones_meta';
 
   // ─── Adapter Registration (call once in main.dart) ───────────────────────
 
@@ -64,12 +67,15 @@ class LocalDbService {
     if (Hive.isBoxOpen(syncBoxName))  await Hive.box<SyncAction>(syncBoxName).close();
   }
 
-  /// Global init: registers adapters and opens the tombstone box.
+  /// Global init: registers adapters and opens the tombstone boxes.
   /// Call ONCE in main() before runApp.
   static Future<void> init() async {
     registerAdapters();
     if (!Hive.isBoxOpen(tombstoneBoxName)) {
       await Hive.openBox<int>(tombstoneBoxName);
+    }
+    if (!Hive.isBoxOpen(tombstoneMetaBoxName)) {
+      await Hive.openBox<String>(tombstoneMetaBoxName);
     }
   }
 
@@ -80,15 +86,23 @@ class LocalDbService {
   static Box<JewelleryItem>   get itemBox      => Hive.box<JewelleryItem>(itemBoxName);
   static Box<PartialPayment>  get paymentBox   => Hive.box<PartialPayment>(paymentBoxName);
   static Box<ActivityLog>     get activityBox  => Hive.box<ActivityLog>(activityBoxName);
-  static Box<SyncAction>      get syncBox      => Hive.box<SyncAction>(syncBoxName);
-  static Box<int>             get tombstoneBox => Hive.box<int>(tombstoneBoxName);
+  static Box<SyncAction>      get syncBox          => Hive.box<SyncAction>(syncBoxName);
+  static Box<int>             get tombstoneBox     => Hive.box<int>(tombstoneBoxName);
+  static Box<String>          get tombstoneMetaBox => Hive.box<String>(tombstoneMetaBoxName);
 
   // ─── Tombstone Helpers ────────────────────────────────────────────────────
   // Tombstones are global: if a record was deleted on this device, it should
   // never be resurrected regardless of which user account is active.
 
-  static Future<void> _addTombstone(String syncId, int serverId) async {
+  static Future<void> _addTombstone(
+      String syncId, int serverId, {
+      String label = '', String type = '',
+  }) async {
     await tombstoneBox.put(syncId, serverId);
+    // Persist display label so Recycle Bin can show it after physical deletion
+    if (label.isNotEmpty || type.isNotEmpty) {
+      await tombstoneMetaBox.put(syncId, '$type|$label');
+    }
   }
 
   static bool isTombstoned(String? syncId) {
@@ -112,6 +126,36 @@ class LocalDbService {
       idempotencyKey:   actionId,
     );
     await syncBox.put(action.id, action);
+  }
+
+  /// For offline-only records (no server id): instead of always queueing a new
+  /// POST (which creates duplicates), find an existing POST for the same syncId
+  /// and update its payload in-place. Only creates a new action if none exists.
+  static Future<void> _upsertOfflinePost(
+      String endpoint, String? syncId, Map<String, dynamic> payload) async {
+    if (syncId != null) {
+      for (final key in syncBox.keys) {
+        final action = syncBox.get(key);
+        if (action == null) continue;
+        if (action.method == 'POST' && action.endpoint == endpoint) {
+          // Check if this action's payload contains our syncId
+          if (action.payload != null) {
+            try {
+              final map = jsonDecode(action.payload!) as Map<String, dynamic>;
+              if (map['sync_id'] == syncId) {
+                // Update payload in-place — preserve original timestamp/idempotency key
+                action.payload = jsonEncode(payload);
+                action.status  = SyncStatus.pending;
+                await action.save();
+                return; // done — no new action needed
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
+    // No existing action found — queue a new POST normally
+    await _queueAction('POST', endpoint, payload);
   }
 
   /// Removes all pending queue actions referencing a given syncId UUID.
@@ -193,8 +237,26 @@ class LocalDbService {
     await partyBox.put(party.syncId, party);
     
     if (!isSync) {
-      await _queueAction('POST', 'parties/', party.toJson());
-      
+      final hasRealServerId = party.id != null && party.id! > 0;
+      final json = party.toJson();
+
+      if (hasRealServerId) {
+        // Deduplicate PATCH for server-synced parties
+        final endpoint = 'parties/${party.id}/';
+        final keysToRemove = <dynamic>[];
+        for (final key in syncBox.keys) {
+          final action = syncBox.get(key);
+          if (action != null && action.method == 'PATCH' && action.endpoint == endpoint) {
+            keysToRemove.add(key);
+          }
+        }
+        if (keysToRemove.isNotEmpty) await syncBox.deleteAll(keysToRemove);
+        await _queueAction('PATCH', endpoint, json);
+      } else {
+        // Offline-only: upsert existing POST instead of creating a duplicate
+        await _upsertOfflinePost('parties/', party.syncId, json);
+      }
+
       final oldJson = isNew ? null : jsonEncode({
         'name': oldParty?.name, 'phone': oldParty?.phone, 'address': oldParty?.address, 'note': oldParty?.note
       });
@@ -220,6 +282,9 @@ class LocalDbService {
     if (p == null) return;
 
     final partyId = p.id;
+    // Capture label before physical deletion so Recycle Bin can show it
+    final partyLabel = p.name;
+    final partyDetail = p.phone.isNotEmpty ? p.phone : 'No phone';
 
     // Cascade: delete all related entries and their items
     final relatedEntries = entryBox.values.where((e) {
@@ -244,11 +309,13 @@ class LocalDbService {
     if (!isSync) {
       final hasServerId = partyId != null && partyId > 0;
       if (hasServerId) {
-        await _addTombstone(syncId, partyId);
+        await _addTombstone(syncId, partyId,
+            label: '$partyLabel|$partyDetail', type: 'Party');
         await _queueAction('DELETE', 'parties/$partyId/', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
-        await _addTombstone(syncId, 0);
+        await _addTombstone(syncId, 0,
+            label: '$partyLabel|$partyDetail', type: 'Party');
       }
       
       await logActivity(
@@ -256,7 +323,7 @@ class LocalDbService {
         entityType: 'PARTY',
         entityId: partyId,
         entitySyncId: syncId,
-        entityNameSnapshot: p.name,
+        entityNameSnapshot: partyLabel,
         description: 'Party deleted',
       );
     }
@@ -359,7 +426,8 @@ class LocalDbService {
         if (keysToRemove.isNotEmpty) await syncBox.deleteAll(keysToRemove);
         await _queueAction('PATCH', endpoint, json);
       } else {
-        await _queueAction('POST', 'entries/', json);
+        // Offline-only: upsert existing POST instead of creating a duplicate
+        await _upsertOfflinePost('entries/', entry.syncId, json);
       }
 
       final oldJson = isNew ? null : jsonEncode({
@@ -385,6 +453,9 @@ class LocalDbService {
   static Future<void> deleteEntry(Entry entry, {bool isSync = false}) async {
     final entryId = entry.id;
     final syncId  = entry.syncId;
+    // Capture label before physical deletion so Recycle Bin can show it
+    final entryLabel = '${entry.srNumber} — ${entry.partyName}';
+    final entryDetail = '₹${entry.amount}  ·  ${entry.status}';
 
     // Delete related items
     final relatedItems = itemBox.values
@@ -398,11 +469,13 @@ class LocalDbService {
     if (!isSync && syncId != null) {
       final hasServerId = entryId != null && entryId > 0;
       if (hasServerId) {
-        await _addTombstone(syncId, entryId);
+        await _addTombstone(syncId, entryId,
+            label: '$entryLabel|$entryDetail', type: 'Entry');
         await _queueAction('DELETE', 'entries/$entryId/?version=${entry.version}', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
-        await _addTombstone(syncId, 0);
+        await _addTombstone(syncId, 0,
+            label: '$entryLabel|$entryDetail', type: 'Entry');
       }
       
       await logActivity(

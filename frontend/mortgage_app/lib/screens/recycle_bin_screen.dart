@@ -33,37 +33,53 @@ class _RecycleBinScreenState extends State<RecycleBinScreen>
   void _load() {
     setState(() => _loading = true);
     final tombstones = LocalDbService.tombstoneBox;
-
-    // Collect syncIds from tombstone box
-    final tombstonedSyncIds = tombstones.keys.cast<String>().toSet();
-
-    // Find matching entries in Hive that are tombstoned
-    final deletedEntries = LocalDbService.entryBox.values
-        .where((e) => e.syncId != null && tombstonedSyncIds.contains(e.syncId))
-        .toList();
-
-    // Find matching parties in Hive that are tombstoned
-    final deletedParties = LocalDbService.partyBox.values
-        .where((p) => p.syncId != null && tombstonedSyncIds.contains(p.syncId.toString()))
-        .toList();
+    final meta       = LocalDbService.tombstoneMetaBox;
 
     final records = <_TombstoneRecord>[];
-    for (final e in deletedEntries) {
+
+    for (final syncId in tombstones.keys.cast<String>()) {
+      final serverId  = tombstones.get(syncId) ?? 0;
+      final raw       = meta.get(syncId);
+
+      if (raw == null || raw.isEmpty) {
+        // Legacy tombstone created before this fix — no display metadata
+        // Try to find the record in the live boxes as a fallback
+        final liveEntry = LocalDbService.entryBox.get(syncId);
+        if (liveEntry != null) {
+          records.add(_TombstoneRecord(
+            type: 'Entry',
+            label: '${liveEntry.srNumber} — ${liveEntry.partyName}',
+            detail: '₹${liveEntry.amount}  ·  ${liveEntry.status}',
+            syncId: syncId,
+            serverId: serverId,
+          ));
+          continue;
+        }
+        final liveParty = LocalDbService.partyBox.get(syncId);
+        if (liveParty != null) {
+          records.add(_TombstoneRecord(
+            type: 'Party',
+            label: liveParty.name,
+            detail: liveParty.phone.isNotEmpty ? liveParty.phone : 'No phone',
+            syncId: syncId,
+            serverId: serverId,
+          ));
+        }
+        continue;
+      }
+
+      // Format written by _addTombstone: 'Type|label|detail'
+      final parts = raw.split('|');
+      final type   = parts.isNotEmpty ? parts[0] : 'Unknown';
+      final label  = parts.length > 1 ? parts[1] : syncId;
+      final detail = parts.length > 2 ? parts[2] : '';
+
       records.add(_TombstoneRecord(
-        type: 'Entry',
-        label: '${e.srNumber} — ${e.partyName}',
-        detail: '₹${e.amount}  ·  ${e.status}',
-        syncId: e.syncId!,
-        serverId: tombstones.get(e.syncId) ?? 0,
-      ));
-    }
-    for (final p in deletedParties) {
-      records.add(_TombstoneRecord(
-        type: 'Party',
-        label: p.name,
-        detail: p.phone.isNotEmpty ? p.phone : 'No phone',
-        syncId: p.syncId.toString(),
-        serverId: tombstones.get(p.syncId.toString()) ?? 0,
+        type: type,
+        label: label,
+        detail: detail,
+        syncId: syncId,
+        serverId: serverId,
       ));
     }
 

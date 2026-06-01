@@ -40,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
           'username': _usernameController.text,
           'password': _passwordController.text,
         }),
-      );
+      ).timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         // Reset throttling

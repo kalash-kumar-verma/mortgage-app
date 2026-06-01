@@ -53,7 +53,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'password': _passwordCtrl.text,
           'email':    _emailCtrl.text.trim(),
         }),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 60));
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
