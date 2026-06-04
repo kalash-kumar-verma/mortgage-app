@@ -71,11 +71,35 @@ class LocalDbService {
   /// Call ONCE in main() before runApp.
   static Future<void> init() async {
     registerAdapters();
+
     if (!Hive.isBoxOpen(tombstoneBoxName)) {
       await Hive.openBox<int>(tombstoneBoxName);
     }
     if (!Hive.isBoxOpen(tombstoneMetaBoxName)) {
       await Hive.openBox<String>(tombstoneMetaBoxName);
+    }
+
+    await _cleanupOldTombstones();
+  }
+
+  static Future<void> _cleanupOldTombstones() async {
+    final now = DateTime.now();
+    final keysToDelete = <String>[];
+    for (final syncId in tombstoneMetaBox.keys.cast<String>()) {
+      final meta = tombstoneMetaBox.get(syncId);
+      if (meta != null && meta.startsWith('{')) {
+        try {
+          final data = jsonDecode(meta);
+          final deletedAt = DateTime.tryParse(data['deletedAt'] ?? '');
+          if (deletedAt != null && now.difference(deletedAt).inDays > 60) {
+            keysToDelete.add(syncId);
+          }
+        } catch (_) {}
+      }
+    }
+    for (final k in keysToDelete) {
+      await tombstoneMetaBox.delete(k);
+      await tombstoneBox.delete(k);
     }
   }
 
@@ -96,12 +120,85 @@ class LocalDbService {
 
   static Future<void> _addTombstone(
       String syncId, int serverId, {
-      String label = '', String type = '',
+      String label = '', String type = '', String payload = '',
   }) async {
     await tombstoneBox.put(syncId, serverId);
-    // Persist display label so Recycle Bin can show it after physical deletion
-    if (label.isNotEmpty || type.isNotEmpty) {
-      await tombstoneMetaBox.put(syncId, '$type|$label');
+    if (label.isNotEmpty || type.isNotEmpty || payload.isNotEmpty) {
+      final jsonMeta = jsonEncode({
+        'type': type,
+        'label': label,
+        'payload': payload,
+        'deletedAt': DateTime.now().toIso8601String(),
+      });
+      await tombstoneMetaBox.put(syncId, jsonMeta);
+    }
+  }
+
+  static Future<void> permanentlyDeleteTombstone(String syncId) async {
+    await tombstoneBox.delete(syncId);
+    await tombstoneMetaBox.delete(syncId);
+  }
+
+  static Future<void> restoreRecord(String syncId) async {
+    final meta = tombstoneMetaBox.get(syncId);
+    if (meta == null || !meta.startsWith('{')) return;
+
+    final data = jsonDecode(meta);
+    final type = data['type'];
+    final payloadStr = data['payload'] as String?;
+    if (payloadStr == null || payloadStr.isEmpty) return;
+    
+    final payload = jsonDecode(payloadStr);
+    final serverId = tombstoneBox.get(syncId) ?? 0;
+    
+    if (type == 'Entry') {
+      final entry = Entry.fromJson(payload);
+      final partyId = entry.party;
+      final p = partyBox.values.firstWhere((p) => p.id == partyId, orElse: () => Party(id: -999, syncId: '', name: '', phone: '', address: '', defaultInterestRate: 0, note: ''));
+      if (p.id == -999) {
+        throw Exception('Cannot restore Entry: The parent Party is deleted. Please restore the Party first.');
+      }
+    }
+
+    bool pendingDeleteCanceled = false;
+    final keysToDelete = <dynamic>[];
+    if (serverId > 0) {
+      final endpointPrefix = type == 'Party' ? 'parties/$serverId/' : type == 'Entry' ? 'entries/$serverId/' : type == 'Item' ? 'items/$serverId/' : 'payments/$serverId/';
+      for (final key in syncBox.keys) {
+        final action = syncBox.get(key);
+        if (action?.method == 'DELETE' && action!.endpoint.contains(endpointPrefix)) {
+          keysToDelete.add(key);
+          pendingDeleteCanceled = true;
+        }
+      }
+    }
+    
+    if (keysToDelete.isNotEmpty) await syncBox.deleteAll(keysToDelete);
+
+    if (type == 'Party') {
+      await partyBox.put(syncId, Party.fromJson(payload));
+    } else if (type == 'Entry') {
+      await entryBox.put(syncId, Entry.fromJson(payload));
+    } else if (type == 'Item') {
+      await itemBox.put(syncId, JewelleryItem.fromJson(payload));
+    } else if (type == 'Payment') {
+      await paymentBox.put(syncId, PartialPayment.fromJson(payload));
+    }
+
+    await permanentlyDeleteTombstone(syncId);
+
+    if (!pendingDeleteCanceled) {
+      final endpoint = type == 'Party' ? 'parties/' : type == 'Entry' ? 'entries/' : type == 'Item' ? 'items/' : 'payments/';
+      final newPayload = Map<String, dynamic>.from(payload);
+      newPayload.remove('id');
+      
+      if (type == 'Entry') {
+        final partyId = payload['party'];
+        final parentParty = partyBox.values.firstWhere((p) => p.id == partyId, orElse: () => Party(id: -999, syncId: '', name: '', phone: '', address: '', defaultInterestRate: 0, note: ''));
+        newPayload['party_sync_id'] = parentParty.syncId;
+      }
+      
+      await _queueAction('POST', endpoint, newPayload);
     }
   }
 
@@ -282,26 +379,20 @@ class LocalDbService {
     if (p == null) return;
 
     final partyId = p.id;
-    // Capture label before physical deletion so Recycle Bin can show it
     final partyLabel = p.name;
     final partyDetail = p.phone.isNotEmpty ? p.phone : 'No phone';
+    final payload = jsonEncode(p.toJson());
 
-    // Cascade: delete all related entries and their items
+    // Cascade: delete all related entries
     final relatedEntries = entryBox.values.where((e) {
       if (partyId != null && e.party == partyId) return true;
       return false;
     }).toList();
 
     for (final e in relatedEntries) {
-      final entryLocalId = e.id;
-      final relatedItems = itemBox.values
-          .where((i) => entryLocalId != null && i.entry == entryLocalId)
-          .toList();
-      for (final i in relatedItems) {
-        await i.delete();
+      if (e.syncId != null) {
+        await deleteEntry(e, isSync: isSync);
       }
-      if (e.syncId != null) await _cancelQueuedActionsForSyncId(e.syncId!);
-      await e.delete();
     }
 
     await partyBox.delete(syncId);
@@ -310,12 +401,12 @@ class LocalDbService {
       final hasServerId = partyId != null && partyId > 0;
       if (hasServerId) {
         await _addTombstone(syncId, partyId,
-            label: '$partyLabel|$partyDetail', type: 'Party');
+            label: '$partyLabel|$partyDetail', type: 'Party', payload: payload);
         await _queueAction('DELETE', 'parties/$partyId/', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
         await _addTombstone(syncId, 0,
-            label: '$partyLabel|$partyDetail', type: 'Party');
+            label: '$partyLabel|$partyDetail', type: 'Party', payload: payload);
       }
       
       await logActivity(
@@ -453,29 +544,38 @@ class LocalDbService {
   static Future<void> deleteEntry(Entry entry, {bool isSync = false}) async {
     final entryId = entry.id;
     final syncId  = entry.syncId;
-    // Capture label before physical deletion so Recycle Bin can show it
     final entryLabel = '${entry.srNumber} — ${entry.partyName}';
     final entryDetail = '₹${entry.amount}  ·  ${entry.status}';
+    final payload = jsonEncode(entry.toJson());
 
     // Delete related items
     final relatedItems = itemBox.values
         .where((i) => i.entry == (entryId ?? -1))
         .toList();
     for (final item in relatedItems) {
-      await item.delete();
+      await deleteItem(item, isSync: isSync, parentSyncId: syncId);
     }
+
+    // Delete related payments
+    final relatedPayments = paymentBox.values
+        .where((p) => p.entry == (entryId ?? -1))
+        .toList();
+    for (final payment in relatedPayments) {
+      await deletePayment(payment, isSync: isSync, parentSyncId: syncId);
+    }
+    
     await entry.delete();
 
     if (!isSync && syncId != null) {
       final hasServerId = entryId != null && entryId > 0;
       if (hasServerId) {
         await _addTombstone(syncId, entryId,
-            label: '$entryLabel|$entryDetail', type: 'Entry');
+            label: '$entryLabel|$entryDetail', type: 'Entry', payload: payload);
         await _queueAction('DELETE', 'entries/$entryId/?version=${entry.version}', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
         await _addTombstone(syncId, 0,
-            label: '$entryLabel|$entryDetail', type: 'Entry');
+            label: '$entryLabel|$entryDetail', type: 'Entry', payload: payload);
       }
       
       await logActivity(
@@ -544,15 +644,21 @@ class LocalDbService {
     }
   }
 
-  static Future<void> deleteItem(JewelleryItem item, {bool isSync = false}) async {
+  static Future<void> deleteItem(JewelleryItem item, {bool isSync = false, String? parentSyncId}) async {
     final itemId = item.id;
     final syncId = item.syncId;
+    final payload = item.toJson();
+    if (parentSyncId != null) payload['entry_sync_id'] = parentSyncId;
+    final payloadStr = jsonEncode(payload);
+
     await item.delete();
     if (!isSync && syncId != null) {
       if (itemId != null && itemId > 0) {
+        await _addTombstone(syncId, itemId, label: item.name, type: 'Item', payload: payloadStr);
         await _queueAction('DELETE', 'items/$itemId/?version=${item.version}', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
+        await _addTombstone(syncId, 0, label: item.name, type: 'Item', payload: payloadStr);
       }
       
       await logActivity(
@@ -603,15 +709,21 @@ class LocalDbService {
     }
   }
 
-  static Future<void> deletePayment(PartialPayment payment, {bool isSync = false}) async {
+  static Future<void> deletePayment(PartialPayment payment, {bool isSync = false, String? parentSyncId}) async {
     final paymentId = payment.id;
     final syncId = payment.syncId;
+    final payload = payment.toJson();
+    if (parentSyncId != null) payload['entry_sync_id'] = parentSyncId;
+    final payloadStr = jsonEncode(payload);
+
     await payment.delete();
     if (!isSync && syncId != null) {
       if (paymentId != null && paymentId > 0) {
+        await _addTombstone(syncId, paymentId, label: '₹${payment.amount}', type: 'Payment', payload: payloadStr);
         await _queueAction('DELETE', 'payments/$paymentId/', null);
       } else {
         await _cancelQueuedActionsForSyncId(syncId);
+        await _addTombstone(syncId, 0, label: '₹${payment.amount}', type: 'Payment', payload: payloadStr);
       }
     }
   }

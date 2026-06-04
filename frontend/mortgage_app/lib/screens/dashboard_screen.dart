@@ -115,25 +115,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(icon, color: color, size: 20),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                  ),
-                  if (onTap != null) ...[const Spacer(), Icon(Icons.chevron_right, size: 14, color: Colors.grey[400])],
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                value,
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color),
-              ),
-            ],
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, color: color, size: 20),
+                    const SizedBox(width: 8),
+                    Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                    if (onTap != null) ...[const SizedBox(width: 8), Icon(Icons.chevron_right, size: 14, color: Colors.grey[400])],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  value,
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color),
+                ),
+              ],
+            ),
           ),
         ),
       ),

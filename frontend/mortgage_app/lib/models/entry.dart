@@ -128,9 +128,17 @@ class Entry extends HiveObject {
       'interest':  interest,
       'status':    status,
       'note':      note,
+      'date':      date,
+      'party_name': partyName,
+      'total_payable': totalPayable,
+      'days_elapsed': daysElapsed,
+      if (closedAt != null) 'closed_at': closedAt,
       if (syncId  != null) 'sync_id':  syncId,
       if (dueDate != null) 'due_date': dueDate,
       'version': version,
+      if (totalPaid != null) 'total_paid': totalPaid,
+      if (remainingPrincipal != null) 'remaining_principal': remainingPrincipal,
+      if (totalAccruedInterest != null) 'total_accrued_interest': totalAccruedInterest,
     };
   }
 

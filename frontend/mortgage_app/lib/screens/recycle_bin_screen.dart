@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/local_db_service.dart';
 
@@ -68,11 +69,27 @@ class _RecycleBinScreenState extends State<RecycleBinScreen>
         continue;
       }
 
-      // Format written by _addTombstone: 'Type|label|detail'
-      final parts = raw.split('|');
-      final type   = parts.isNotEmpty ? parts[0] : 'Unknown';
-      final label  = parts.length > 1 ? parts[1] : syncId;
-      final detail = parts.length > 2 ? parts[2] : '';
+      String type = 'Unknown';
+      String label = syncId;
+      String detail = '';
+      bool hasPayload = false;
+
+      if (raw.startsWith('{')) {
+        try {
+          final data = jsonDecode(raw);
+          type = data['type'] ?? 'Unknown';
+          label = data['label'] ?? syncId;
+          detail = data['deletedAt'] != null 
+              ? 'Deleted on ${data['deletedAt'].split('T')[0]}' 
+              : '';
+          hasPayload = data['payload'] != null && data['payload'].isNotEmpty;
+        } catch (_) {}
+      } else {
+        final parts = raw.split('|');
+        type = parts.isNotEmpty ? parts[0] : 'Unknown';
+        label = parts.length > 1 ? parts[1] : syncId;
+        detail = parts.length > 2 ? parts[2] : '';
+      }
 
       records.add(_TombstoneRecord(
         type: type,
@@ -80,6 +97,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen>
         detail: detail,
         syncId: syncId,
         serverId: serverId,
+        hasPayload: hasPayload,
       ));
     }
 
@@ -134,27 +152,210 @@ class _RecycleBinScreenState extends State<RecycleBinScreen>
             style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
         subtitle: Text(r.detail,
             style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-        trailing: r.serverId > 0
-            ? Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text('Pending server delete',
-                    style: TextStyle(fontSize: 10, color: Colors.orange)),
-              )
-            : Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.green.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text('Deleted',
-                    style: TextStyle(fontSize: 10, color: Colors.green)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (r.hasPayload)
+              IconButton(
+                icon: const Icon(Icons.restore, color: Colors.blue),
+                tooltip: 'Restore',
+                onPressed: () => _handleRestore(r),
               ),
+            IconButton(
+              icon: const Icon(Icons.delete_forever, color: Colors.red),
+              tooltip: 'Permanently Delete',
+              onPressed: () => _handlePermanentDelete(r),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  Future<void> _handlePermanentDelete(_TombstoneRecord r) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Permanent Delete'),
+        content: const Text('This will permanently remove the record from the local recycle bin. Are you sure?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete Forever', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await LocalDbService.permanentlyDeleteTombstone(r.syncId);
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permanently deleted from local device')));
+    }
+  }
+
+  Future<void> _handleRestore(_TombstoneRecord r) async {
+    if (r.type == 'Party') {
+      final mode = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Restore Party'),
+          content: const Text('Do you want to restore only the Party, or the Party and all its deleted child records?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'party_only'),
+              child: const Text('Party Only'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'all'),
+              child: const Text('Party + Children', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+
+      if (mode == null || mode == 'cancel') return;
+      
+      setState(() => _loading = true);
+      try {
+        await LocalDbService.restoreRecord(r.syncId);
+        
+        if (mode == 'all') {
+          final metaBox = LocalDbService.tombstoneMetaBox;
+          
+          final restoredEntryIds = <int>{};
+          final restoredEntrySyncIds = <String>{};
+
+          // 1. Restore Entries
+          final entrySyncIds = metaBox.keys.cast<String>().toList();
+          for (final syncId in entrySyncIds) {
+            final meta = metaBox.get(syncId);
+            if (meta != null && meta.startsWith('{')) {
+              try {
+                final data = jsonDecode(meta);
+                if (data['type'] == 'Entry' && data['payload'] != null) {
+                  final payload = jsonDecode(data['payload']);
+                  if (payload['party'] == LocalDbService.partyBox.get(r.syncId)?.id) {
+                    await LocalDbService.restoreRecord(syncId);
+                    if (payload['id'] != null) restoredEntryIds.add(payload['id']);
+                    restoredEntrySyncIds.add(syncId);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+          
+          // 2. Restore Items
+          final itemSyncIds = metaBox.keys.cast<String>().toList();
+          for (final syncId in itemSyncIds) {
+            final meta = metaBox.get(syncId);
+            if (meta != null && meta.startsWith('{')) {
+              try {
+                final data = jsonDecode(meta);
+                if (data['type'] == 'Item' && data['payload'] != null) {
+                  final payload = jsonDecode(data['payload']);
+                  final eId = payload['entry'];
+                  final eSyncId = payload['entry_sync_id'];
+                  if (restoredEntryIds.contains(eId) || restoredEntrySyncIds.contains(eSyncId)) {
+                    await LocalDbService.restoreRecord(syncId);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+          
+          // 3. Restore Payments
+          final paymentSyncIds = metaBox.keys.cast<String>().toList();
+          for (final syncId in paymentSyncIds) {
+            final meta = metaBox.get(syncId);
+            if (meta != null && meta.startsWith('{')) {
+              try {
+                final data = jsonDecode(meta);
+                if (data['type'] == 'Payment' && data['payload'] != null) {
+                  final payload = jsonDecode(data['payload']);
+                  final eId = payload['entry'];
+                  final eSyncId = payload['entry_sync_id'];
+                  if (restoredEntryIds.contains(eId) || restoredEntrySyncIds.contains(eSyncId)) {
+                    await LocalDbService.restoreRecord(syncId);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        _load();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restored successfully')));
+      } catch (e) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } else {
+      // Entry or other type
+      setState(() => _loading = true);
+      try {
+        await LocalDbService.restoreRecord(r.syncId);
+        
+        if (r.type == 'Entry') {
+          final metaBox = LocalDbService.tombstoneMetaBox;
+          final entryServerId = r.serverId;
+          
+          // 1. Restore Items
+          final itemSyncIds = metaBox.keys.cast<String>().toList();
+          for (final syncId in itemSyncIds) {
+            final meta = metaBox.get(syncId);
+            if (meta != null && meta.startsWith('{')) {
+              try {
+                final data = jsonDecode(meta);
+                if (data['type'] == 'Item' && data['payload'] != null) {
+                  final payload = jsonDecode(data['payload']);
+                  final eId = payload['entry'];
+                  final eSyncId = payload['entry_sync_id'];
+                  if ((entryServerId > 0 && eId == entryServerId) || eSyncId == r.syncId) {
+                    await LocalDbService.restoreRecord(syncId);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+          
+          // 2. Restore Payments
+          final paymentSyncIds = metaBox.keys.cast<String>().toList();
+          for (final syncId in paymentSyncIds) {
+            final meta = metaBox.get(syncId);
+            if (meta != null && meta.startsWith('{')) {
+              try {
+                final data = jsonDecode(meta);
+                if (data['type'] == 'Payment' && data['payload'] != null) {
+                  final payload = jsonDecode(data['payload']);
+                  final eId = payload['entry'];
+                  final eSyncId = payload['entry_sync_id'];
+                  if ((entryServerId > 0 && eId == entryServerId) || eSyncId == r.syncId) {
+                    await LocalDbService.restoreRecord(syncId);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        
+        _load();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restored successfully')));
+      } catch (e) {
+        setState(() => _loading = false);
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Restore Failed'),
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            ],
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -205,12 +406,14 @@ class _TombstoneRecord {
   final String detail;
   final String syncId;
   final int serverId;
+  final bool hasPayload;
 
-  const _TombstoneRecord({
+  _TombstoneRecord({
     required this.type,
     required this.label,
     required this.detail,
     required this.syncId,
     required this.serverId,
+    this.hasPayload = false,
   });
 }
