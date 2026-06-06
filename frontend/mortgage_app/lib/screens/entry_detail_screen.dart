@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
 import '../models/partial_payment.dart';
@@ -28,12 +30,45 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   bool _loadingPayments = true;
   bool _withdrawing = false; // guard against double-tap
 
+  late final ValueListenable<Box<JewelleryItem>> _itemsListenable;
+  late final ValueListenable<Box<PartialPayment>> _paymentsListenable;
+  late final ValueListenable<Box<Entry>> _entryListenable;
+
   @override
   void initState() {
     super.initState();
     _entry = widget.entry;
     _loadItems();
     _loadPayments();
+    
+    _itemsListenable = LocalDbService.itemBox.listenable();
+    _paymentsListenable = LocalDbService.paymentBox.listenable();
+    _entryListenable = LocalDbService.entryBox.listenable();
+    
+    _itemsListenable.addListener(_loadItems);
+    _paymentsListenable.addListener(_loadPayments);
+    _entryListenable.addListener(_onEntryChanged);
+  }
+
+  void _onEntryChanged() {
+    if (mounted) {
+      final updatedEntry = LocalDbService.entryBox.get(_entry.syncId);
+      if (updatedEntry != null && updatedEntry.id != _entry.id) {
+        setState(() {
+          _entry = updatedEntry;
+        });
+        _loadItems();
+        _loadPayments();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _itemsListenable.removeListener(_loadItems);
+    _paymentsListenable.removeListener(_loadPayments);
+    _entryListenable.removeListener(_onEntryChanged);
+    super.dispose();
   }
 
   Future<void> _loadPayments() async {

@@ -46,6 +46,7 @@ class SyncManager {
   Timer? _retryTimer;
   bool _isSyncing = false;
   bool _initialized = false;
+  final Set<String> _recentlyResolvedSyncIds = {};
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -178,6 +179,7 @@ class SyncManager {
       await _pushQueue();
       await _smartPullSync();
     } finally {
+      _recentlyResolvedSyncIds.clear();
       _isSyncing = false;
       isSyncingNotifier.value = false;
       _updatePendingCount();
@@ -266,6 +268,10 @@ class SyncManager {
           }
 
           // Stop on first transient failure in this list — next cycle will retry from here
+          if (e.toString().contains('Parent entry not yet synced') || e.toString().contains('Parent party not yet synced')) {
+            debugPrint('[SyncManager] Skipping child action until parent syncs: ${action.endpoint}');
+            continue;
+          }
           break;
         }
       }
@@ -490,6 +496,8 @@ class SyncManager {
       final newId  = data['id']      as int?;
       final syncId = data['sync_id'] as String?;
       if (newId == null || syncId == null) return;
+      
+      _recentlyResolvedSyncIds.add(syncId);
 
       if (endpoint == 'parties/') {
         final p = LocalDbService.partyBox.get(syncId);
@@ -575,6 +583,7 @@ class SyncManager {
       //   B) Records already synced but with a pending edit/delete: identified by
       //      integer server ID in endpoint (e.g. "entries/42/", "parties/7/").
       final pendingSyncIds = <String>{};
+      pendingSyncIds.addAll(_recentlyResolvedSyncIds); // Fix B: Protect newly resolved records
       // Regex for UUID (class A — unsynced records)
       final uuidRx = RegExp(
           r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');

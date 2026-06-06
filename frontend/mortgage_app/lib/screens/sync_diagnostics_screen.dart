@@ -5,6 +5,7 @@ import '../models/sync_action.dart';
 import '../services/sync_manager.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 class SyncDiagnosticsScreen extends StatefulWidget {
   const SyncDiagnosticsScreen({super.key});
@@ -14,20 +15,15 @@ class SyncDiagnosticsScreen extends StatefulWidget {
 }
 
 class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
-  Timer? _refreshTimer;
   bool _isSyncing = false;
 
   @override
   void initState() {
     super.initState();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (mounted) setState(() {});
-    });
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
     super.dispose();
   }
 
@@ -182,37 +178,40 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = SyncManager().getQueueStats();
-    final actions = SyncManager().getQueueDrainOrder();
-    final lastSynced = SettingsService.lastSyncedAt;
-    
-    // Determine health state
-    Color healthColor = Colors.green;
-    String healthText = 'Healthy';
-    IconData healthIcon = Icons.check_circle;
-    
-    if (stats['conflict']! > 0) {
-      healthColor = Colors.red;
-      healthText = 'Conflicts detected';
-      healthIcon = Icons.error;
-    } else if (stats['failed']! > 0 || stats['abandoned']! > 0) {
-      healthColor = Colors.orange;
-      healthText = 'Errors in queue';
-      healthIcon = Icons.warning;
-    } else if (stats['pending']! > 0 || stats['syncing']! > 0) {
-      healthColor = Colors.blue;
-      healthText = 'Syncing...';
-      healthIcon = Icons.sync;
-    }
+    return ValueListenableBuilder<Box<SyncAction>>(
+      valueListenable: LocalDbService.syncBox.listenable(),
+      builder: (context, box, _) {
+        final stats = SyncManager().getQueueStats();
+        final actions = SyncManager().getQueueDrainOrder();
+        final lastSynced = SettingsService.lastSyncedAt;
+        
+        // Determine health state
+        Color healthColor = Colors.green;
+        String healthText = 'Healthy';
+        IconData healthIcon = Icons.check_circle;
+        
+        if (stats['conflict']! > 0) {
+          healthColor = Colors.red;
+          healthText = 'Conflicts detected';
+          healthIcon = Icons.error;
+        } else if (stats['failed']! > 0 || stats['abandoned']! > 0) {
+          healthColor = Colors.orange;
+          healthText = 'Errors in queue';
+          healthIcon = Icons.warning;
+        } else if (stats['pending']! > 0 || stats['syncing']! > 0) {
+          healthColor = Colors.blue;
+          healthText = 'Syncing...';
+          healthIcon = Icons.sync;
+        }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sync Diagnostics'),
-        backgroundColor: Colors.grey[900],
-        foregroundColor: Colors.white,
-      ),
-      body: Column(
-        children: [
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Sync Diagnostics'),
+            backgroundColor: Colors.grey[900],
+            foregroundColor: Colors.white,
+          ),
+          body: Column(
+            children: [
           // Health Banner
           Container(
             color: healthColor.withValues(alpha: 0.1),
@@ -292,6 +291,8 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
           ),
         ],
       ),
+    );
+      },
     );
   }
 
