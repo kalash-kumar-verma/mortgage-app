@@ -19,7 +19,7 @@ class JewelleryItem extends HiveObject {
   @HiveField(4)
   double? weight;
 
-  @HiveField(5)
+  @HiveField(5, defaultValue: '')
   String note;
 
   @HiveField(6)
@@ -28,8 +28,17 @@ class JewelleryItem extends HiveObject {
   @HiveField(7)
   String? syncId;
 
-  @HiveField(8)
+  @HiveField(8, defaultValue: 1)
   int version;
+
+  @HiveField(9, defaultValue: 'held')
+  String releaseStatus;
+
+  @HiveField(10)
+  String? releaseDate;
+
+  @HiveField(11)
+  String? releaseNote;
 
   JewelleryItem({
     this.id,
@@ -41,6 +50,9 @@ class JewelleryItem extends HiveObject {
     this.image,
     this.syncId,
     this.version = 1,
+    this.releaseStatus = 'held',
+    this.releaseDate,
+    this.releaseNote,
   });
 
   factory JewelleryItem.fromJson(Map<String, dynamic> json) {
@@ -54,6 +66,9 @@ class JewelleryItem extends HiveObject {
       image: json['image'],
       syncId: json['sync_id'],
       version: json['version'] ?? 1,
+      releaseStatus: json['release_status'] ?? 'held',
+      releaseDate: json['release_date'],
+      releaseNote: json['release_note'],
     );
   }
 
@@ -67,6 +82,9 @@ class JewelleryItem extends HiveObject {
       'note': note,
       if (syncId != null) 'sync_id': syncId,
       'version': version,
+      'release_status': releaseStatus,
+      if (releaseDate != null) 'release_date': releaseDate,
+      if (releaseNote != null) 'release_note': releaseNote,
     };
   }
 }

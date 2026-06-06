@@ -644,6 +644,40 @@ class LocalDbService {
     }
   }
 
+  static Future<void> releaseItem({
+    required JewelleryItem item,
+    required String status,
+    String? date,
+    String? note,
+  }) async {
+    item.releaseStatus = status;
+    item.releaseDate = date;
+    item.releaseNote = note;
+    await item.save();
+
+    final payload = {
+      'release_status': status,
+      if (date != null) 'release_date': date,
+      if (note != null) 'release_note': note,
+      'version': item.version,
+    };
+
+    if (item.id != null && item.id! > 0) {
+      await _queueAction('PATCH', 'items/${item.id}/?version=${item.version}', payload);
+    } else {
+      await _upsertOfflinePost('items/', item.syncId, item.toJson());
+    }
+
+    await logActivity(
+      action: 'RELEASE_ITEM',
+      entityType: 'ITEM',
+      entityId: item.id,
+      entitySyncId: item.syncId,
+      entityNameSnapshot: item.name,
+      description: 'Item status changed to $status: ${item.name}',
+    );
+  }
+
   static Future<void> deleteItem(JewelleryItem item, {bool isSync = false, String? parentSyncId}) async {
     final itemId = item.id;
     final syncId = item.syncId;

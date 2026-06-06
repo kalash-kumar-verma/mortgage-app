@@ -28,13 +28,13 @@ class Entry extends HiveObject {
   @HiveField(7)
   double totalPayable;
 
-  @HiveField(8)
+  @HiveField(8, defaultValue: 0)
   int daysElapsed;
 
-  @HiveField(9)
+  @HiveField(9, defaultValue: '')
   String partyName;
 
-  @HiveField(10)
+  @HiveField(10, defaultValue: '')
   String note;
 
   @HiveField(11)
@@ -51,7 +51,7 @@ class Entry extends HiveObject {
   /// Server-side version counter. Incremented on every PATCH.
   /// Sent with PATCH requests for conflict detection.
   /// Defaults to 1 for old Hive records that predate this field.
-  @HiveField(14)
+  @HiveField(14, defaultValue: 1)
   int version;
 
   @HiveField(15)

@@ -5,12 +5,12 @@ import '../models/jewellery_item.dart';
 import '../models/partial_payment.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'add_item_screen.dart';
 import 'edit_entry_screen.dart';
 import 'withdraw_screen.dart';
 import 'receipt_screen.dart';
 import 'partial_payment_dialog.dart';
+import 'package:intl/intl.dart';
 
 class EntryDetailScreen extends StatefulWidget {
   final Entry entry;
@@ -39,6 +39,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   Future<void> _loadPayments() async {
     setState(() => _loadingPayments = true);
 
+    // Load exclusively from local Hive — SyncManager handles server
+    // reconciliation safely with hasPendingOp guards.
     final localList = _entry.syncId != null
         ? LocalDbService.getPaymentsForEntrySyncId(_entry.syncId!)
         : <PartialPayment>[];
@@ -48,33 +50,15 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         _loadingPayments = false;
       });
     }
-
-    final hasRealId = _entry.id != null && _entry.id! > 0;
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = !connectivity.contains(ConnectivityResult.none);
-    if (!isOnline || !hasRealId) return;
-
-    try {
-      final serverList = await ApiService().fetchPayments(_entry.id!).timeout(const Duration(seconds: 5));
-      for (var p in serverList) {
-        p.syncId ??= 'server-${p.id}';
-        if (LocalDbService.isTombstoned(p.syncId)) continue;
-        await LocalDbService.savePayment(p, isSync: true);
-      }
-      if (mounted) {
-        final updated = _entry.syncId != null
-            ? LocalDbService.getPaymentsForEntrySyncId(_entry.syncId!)
-            : <PartialPayment>[];
-        setState(() => _payments = updated);
-      }
-    } catch (_) {}
   }
 
   Future<void> _loadItems() async {
     setState(() => _loadingItems = true);
 
-    // LOCAL FIRST: load from Hive by syncId (Bug #4 fix — more reliable than
-    // integer ID matching, which breaks after sync updates entry.id).
+    // Load exclusively from local Hive — SyncManager handles server
+    // reconciliation safely with hasPendingOp guards. Fetching directly
+    // from the server here would overwrite pending offline edits (e.g.
+    // item releases queued but not yet pushed) with stale server state.
     final localList = _entry.syncId != null
         ? LocalDbService.getItemsForEntrySyncId(_entry.syncId!)
         : LocalDbService.getItemsForEntry(_entry.id ?? -1);
@@ -83,31 +67,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         _items = localList;
         _loadingItems = false;
       });
-    }
-
-    // THEN: if online and entry is synced, refresh from server and save locally
-    final hasRealId = _entry.id != null && _entry.id! > 0;
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = !connectivity.contains(ConnectivityResult.none);
-    if (!isOnline || !hasRealId) return;
-
-    try {
-      final serverList = await ApiService().fetchItems(_entry.id!).timeout(const Duration(seconds: 5));
-      for (var item in serverList) {
-        item.syncId ??= 'server-${item.id}';
-        // Bug #15 fix: skip items that were deleted locally (tombstoned)
-        if (LocalDbService.isTombstoned(item.syncId)) continue;
-        await LocalDbService.saveItem(item, isSync: true);
-      }
-      // Reload from local (now contains fresh server data)
-      if (mounted) {
-        final updated = _entry.syncId != null
-            ? LocalDbService.getItemsForEntrySyncId(_entry.syncId!)
-            : LocalDbService.getItemsForEntry(_entry.id!);
-        setState(() => _items = updated);
-      }
-    } catch (_) {
-      // Server unavailable — already showing local data, nothing to do
     }
   }
 
@@ -156,6 +115,98 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
   bool get _canWithdraw => _entry.status == 'ACTIVE' || _entry.status == 'OVERDUE';
   bool get _canEdit => _entry.status == 'ACTIVE' || _entry.status == 'OVERDUE';
+
+  String get _itemReleaseStatus {
+    if (_items.isEmpty) return 'no_items';
+    final statuses = _items.map((i) => i.releaseStatus).toSet();
+    if (statuses.every((s) => s == 'released' || s == 'transferred')) return 'all_released';
+    if (statuses.contains('held') && statuses.length > 1) return 'partial';
+    return 'all_held';
+  }
+
+  Color get _releaseStatusColor {
+    final status = _itemReleaseStatus;
+    if (status == 'all_released') return Colors.blue;
+    if (status == 'partial') return Colors.amber.shade700;
+    return Colors.green;
+  }
+
+  String get _releaseStatusText {
+    final status = _itemReleaseStatus;
+    if (status == 'all_released') return 'All Items Released';
+    if (status == 'partial') return 'Partially Released';
+    if (status == 'no_items') return 'No Items';
+    return 'All Items Held';
+  }
+
+  Future<void> _showReleaseDialog(JewelleryItem item) async {
+    final noteCtrl = TextEditingController();
+    DateTime? selectedDate = DateTime.now();
+    bool confirmed = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Release ${item.name}'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Mark this item as released? It will no longer be held as collateral.'),
+                  const SizedBox(height: 16),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Release Date'),
+                    subtitle: Text(selectedDate != null ? DateFormat('yyyy-MM-dd').format(selectedDate!) : 'Select date'),
+                    trailing: const Icon(Icons.calendar_today),
+                    onTap: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: selectedDate ?? DateTime.now(),
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2100),
+                      );
+                      if (d != null) setDialogState(() => selectedDate = d);
+                    },
+                  ),
+                  TextField(
+                    controller: noteCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Note (Optional)',
+                      hintText: 'e.g. Returned to customer',
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                ElevatedButton(
+                  onPressed: () {
+                    confirmed = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Release'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed && mounted) {
+      await LocalDbService.releaseItem(
+        item: item,
+        status: 'released',
+        date: selectedDate != null ? DateFormat('yyyy-MM-dd').format(selectedDate!) : null,
+        note: noteCtrl.text.trim(),
+      );
+      _loadItems();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} released successfully')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -217,6 +268,20 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                           style: TextStyle(color: _statusColor(_entry.status), fontWeight: FontWeight.bold),
                         ),
                       ),
+                      const Spacer(),
+                      if (_items.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _releaseStatusColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: _releaseStatusColor.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            _releaseStatusText,
+                            style: TextStyle(color: _releaseStatusColor, fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                        ),
                     ],
                   ),
                   const Divider(height: 20),
@@ -345,7 +410,25 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                     ),
                   ),
                 ),
-                title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                title: Row(
+                  children: [
+                    Expanded(child: Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    if (item.releaseStatus != 'held')
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: item.releaseStatus == 'released' ? Colors.blue.withOpacity(0.1) : Colors.purple.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: item.releaseStatus == 'released' ? Colors.blue : Colors.purple),
+                        ),
+                        child: Text(
+                          item.releaseStatus.toUpperCase(),
+                          style: TextStyle(fontSize: 10, color: item.releaseStatus == 'released' ? Colors.blue : Colors.purple, fontWeight: FontWeight.bold),
+                        ),
+                      )
+                  ],
+                ),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -380,9 +463,20 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 ),
                 isThreeLine: item.note.isNotEmpty || item.weight != null,
                 trailing: _canEdit
-                    ? IconButton(
-                        icon: const Icon(Icons.delete_outline, color: Colors.red),
-                        onPressed: () => _deleteItem(item),
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (item.releaseStatus == 'held')
+                            IconButton(
+                              icon: const Icon(Icons.outbox, color: Colors.blue),
+                              tooltip: 'Release Item',
+                              onPressed: () => _showReleaseDialog(item),
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.red),
+                            onPressed: () => _deleteItem(item),
+                          ),
+                        ],
                       )
                     : null,
               ),

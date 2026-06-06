@@ -16,7 +16,7 @@ class PartialPayment extends HiveObject {
   @HiveField(3)
   String date;
 
-  @HiveField(4)
+  @HiveField(4, defaultValue: '')
   String note;
 
   @HiveField(5)

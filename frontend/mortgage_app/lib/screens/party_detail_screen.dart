@@ -111,6 +111,17 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (p.accountNumber != null && p.accountNumber!.isNotEmpty) ...[
+                  Row(children: [
+                    const Icon(Icons.tag, size: 16, color: Colors.blueGrey),
+                    const SizedBox(width: 6),
+                    Text(
+                      p.accountNumber!, 
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blueGrey),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                ],
                 if (p.phone.isNotEmpty) ...[
                   Row(children: [
                     const Icon(Icons.phone, size: 16, color: Colors.grey),

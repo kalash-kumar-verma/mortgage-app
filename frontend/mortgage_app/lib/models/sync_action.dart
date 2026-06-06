@@ -31,15 +31,15 @@ class SyncAction extends HiveObject {
   @HiveField(4)
   final DateTime timestamp;
 
-  @HiveField(5)
+  @HiveField(5, defaultValue: false)
   bool isSyncing; // legacy field — kept to avoid breaking existing stored records
 
   /// Lifecycle status: 'pending' | 'syncing' | 'failed'
-  @HiveField(6)
+  @HiveField(6, defaultValue: 'pending')
   String status;
 
   /// Number of failed attempts. After maxRetries the action is abandoned.
-  @HiveField(7)
+  @HiveField(7, defaultValue: 0)
   int retryCount;
 
   /// Last error message from a failed attempt. Displayed in settings/debug.
@@ -48,7 +48,7 @@ class SyncAction extends HiveObject {
 
   /// Unique key sent to server to prevent duplicate processing.
   /// The server uses this to detect and de-duplicate retried requests.
-  @HiveField(9)
+  @HiveField(9, defaultValue: '')
   String idempotencyKey;
 
   static const int maxRetries = 5;

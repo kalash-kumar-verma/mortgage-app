@@ -19,7 +19,7 @@ class ActivityLog extends HiveObject {
   @HiveField(4)
   String? entitySyncId;
 
-  @HiveField(5)
+  @HiveField(5, defaultValue: '')
   String entityNameSnapshot; // e.g., 'SR-1025' or 'John Doe'
 
   @HiveField(6)

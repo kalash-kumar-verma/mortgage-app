@@ -21,7 +21,7 @@ class PartialPaymentAdapter extends TypeAdapter<PartialPayment> {
       entry: fields[1] as int,
       amount: fields[2] as String,
       date: fields[3] as String,
-      note: fields[4] as String,
+      note: fields[4] == null ? '' : fields[4] as String,
       syncId: fields[5] as String?,
     );
   }

@@ -16,10 +16,10 @@ class Party extends HiveObject {
   @HiveField(3)
   String address;
 
-  @HiveField(4)
+  @HiveField(4, defaultValue: '')
   String note;
 
-  @HiveField(5)
+  @HiveField(5, defaultValue: '')
   String createdAt;
 
   @HiveField(6)
@@ -27,6 +27,9 @@ class Party extends HiveObject {
 
   @HiveField(7)
   String? syncId;
+
+  @HiveField(8)
+  String? accountNumber;
 
   Party({
     this.id,
@@ -37,6 +40,7 @@ class Party extends HiveObject {
     this.createdAt = '',
     this.defaultInterestRate,
     this.syncId,
+    this.accountNumber,
   });
 
   factory Party.fromJson(Map<String, dynamic> json) {
@@ -51,6 +55,7 @@ class Party extends HiveObject {
           ? double.tryParse(json['default_interest_rate'].toString()) 
           : null,
       syncId: json['sync_id'],
+      accountNumber: json['account_number'],
     );
   }
 
@@ -63,6 +68,7 @@ class Party extends HiveObject {
       'note': note,
       if (defaultInterestRate != null) 'default_interest_rate': defaultInterestRate,
       if (syncId != null) 'sync_id': syncId,
+      if (accountNumber != null) 'account_number': accountNumber,
     };
   }
 }

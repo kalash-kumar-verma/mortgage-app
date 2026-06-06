@@ -43,6 +43,20 @@ class Party(models.Model):
     default_interest_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     sync_id = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
+    account_number = models.CharField(max_length=20, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.account_number:
+            max_num = 0
+            for p in Party.objects.exclude(account_number__isnull=True).exclude(account_number__exact=''):
+                if p.account_number and p.account_number.startswith('ACC-'):
+                    try:
+                        num = int(''.join(filter(str.isdigit, p.account_number)))
+                        if num > max_num: max_num = num
+                    except ValueError:
+                        pass
+            self.account_number = f"ACC-{str(max_num + 1).zfill(3)}"
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -240,6 +254,18 @@ class Entry(models.Model):
             return None
         return (self.due_date - date.today()).days
 
+    @property
+    def item_release_status(self):
+        items = self.jewelleryitem_set.all()
+        if not items.exists():
+            return 'no_items'
+        statuses = set(i.release_status for i in items)
+        if statuses == {'released'} or statuses == {'transferred'} or statuses <= {'released', 'transferred'}:
+            return 'all_released'
+        if 'held' in statuses and len(statuses) > 1:
+            return 'partial'
+        return 'all_held'
+
     def __str__(self):
         return f"{self.sr_number} - {self.party.name}"
 
@@ -253,6 +279,19 @@ class JewelleryItem(models.Model):
     image = models.ImageField(upload_to='items/', null=True, blank=True)
     sync_id = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
     version = models.IntegerField(default=1)
+
+    RELEASE_STATUS_CHOICES = [
+        ('held', 'Held'),
+        ('released', 'Released'),
+        ('transferred', 'Transferred'),
+    ]
+    release_status = models.CharField(
+        max_length=20,
+        choices=RELEASE_STATUS_CHOICES,
+        default='held',
+    )
+    release_date = models.DateField(null=True, blank=True)
+    release_note = models.TextField(blank=True, default='')
 
     def __str__(self):
         return f"{self.name} ({self.item_type})"

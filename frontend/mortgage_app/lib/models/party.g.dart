@@ -21,17 +21,18 @@ class PartyAdapter extends TypeAdapter<Party> {
       name: fields[1] as String,
       phone: fields[2] as String,
       address: fields[3] as String,
-      note: fields[4] as String,
-      createdAt: fields[5] as String,
+      note: fields[4] == null ? '' : fields[4] as String,
+      createdAt: fields[5] == null ? '' : fields[5] as String,
       defaultInterestRate: fields[6] as double?,
       syncId: fields[7] as String?,
+      accountNumber: fields[8] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Party obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -47,7 +48,9 @@ class PartyAdapter extends TypeAdapter<Party> {
       ..writeByte(6)
       ..write(obj.defaultInterestRate)
       ..writeByte(7)
-      ..write(obj.syncId);
+      ..write(obj.syncId)
+      ..writeByte(8)
+      ..write(obj.accountNumber);
   }
 
   @override

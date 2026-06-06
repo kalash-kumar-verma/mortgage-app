@@ -24,6 +24,7 @@ class EntrySerializer(serializers.ModelSerializer):
     remaining_principal = serializers.ReadOnlyField()
     total_accrued_interest = serializers.ReadOnlyField()
     party_name = serializers.SerializerMethodField()
+    item_release_status = serializers.ReadOnlyField()
 
     def get_party_name(self, obj):
         return obj.party.name

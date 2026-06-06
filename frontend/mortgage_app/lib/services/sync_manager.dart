@@ -316,6 +316,18 @@ class SyncManager {
       }
     }
 
+    // ── Resolve entry_sync_id → real entry ID for POST payments/ ──
+    if (action.endpoint == 'payments/' && payloadMap != null) {
+      if (payloadMap.containsKey('entry_sync_id')) {
+        final e = LocalDbService.entryBox.get(payloadMap['entry_sync_id']);
+        if (e == null || e.id == null || e.id! <= 0) {
+          throw Exception('Parent entry not yet synced to server — deferring payment sync');
+        }
+        payloadMap['entry'] = e.id;
+        payloadMap.remove('entry_sync_id');
+      }
+    }
+
     // ── Resolve UUID in endpoint → real integer ID ──
     // e.g. "entries/{syncId}/withdraw/" → "entries/42/withdraw/"
     String endpoint = action.endpoint;
@@ -430,6 +442,9 @@ class SyncManager {
     if (map['weight'] != null && map['weight'].toString().isNotEmpty) {
       request.fields['weight'] = map['weight'].toString();
     }
+    if (map['release_status'] != null) request.fields['release_status'] = map['release_status'].toString();
+    if (map['release_date'] != null) request.fields['release_date'] = map['release_date'].toString();
+    if (map['release_note'] != null) request.fields['release_note'] = map['release_note'].toString();
     if (map['image'] != null && map['image'].toString().isNotEmpty) {
       try {
         request.files.add(
@@ -483,13 +498,34 @@ class SyncManager {
               i.entry = newId;
               await i.save();
             }
+            
+            // Cascade to payments that linked via negative temp ID
+            for (final p in LocalDbService.paymentBox.values
+                .where((p) => p.entry == oldId)
+                .toList()) {
+              p.entry = newId;
+              await p.save();
+            }
           }
         }
       } else if (endpoint == 'items/') {
         final i = LocalDbService.itemBox.get(syncId);
         if (i != null) {
           i.id = newId;
+          // Fix A: resolve parent entry FK from server response so the item
+          // remains visible in UI queries (which filter by entry integer ID).
+          final serverEntryId = data['entry'] as int?;
+          if (serverEntryId != null && serverEntryId > 0) i.entry = serverEntryId;
           await LocalDbService.itemBox.put(syncId, i);
+        }
+      } else if (endpoint == 'payments/') {
+        final p = LocalDbService.paymentBox.get(syncId);
+        if (p != null) {
+          p.id = newId;
+          // Fix A: resolve parent entry FK so payment remains visible in UI.
+          final serverEntryId = data['entry'] as int?;
+          if (serverEntryId != null && serverEntryId > 0) p.entry = serverEntryId;
+          await LocalDbService.paymentBox.put(syncId, p);
         }
       }
     } catch (e) {
@@ -628,6 +664,11 @@ class SyncManager {
                 if (localItem.version < serverItem.version)                 { localItem.version = serverItem.version; dirty = true; }
                 if (localItem.name != serverItem.name)                      { localItem.name = serverItem.name; dirty = true; }
                 if (localItem.note != serverItem.note)                      { localItem.note = serverItem.note; dirty = true; }
+                // Fix C: Phase 1 release fields were missing from reconciliation
+                // causing remote releases to never sync down to this device.
+                if (localItem.releaseStatus != serverItem.releaseStatus)    { localItem.releaseStatus = serverItem.releaseStatus; dirty = true; }
+                if (localItem.releaseDate   != serverItem.releaseDate)      { localItem.releaseDate   = serverItem.releaseDate;   dirty = true; }
+                if (localItem.releaseNote   != serverItem.releaseNote)      { localItem.releaseNote   = serverItem.releaseNote;   dirty = true; }
               }
               if (dirty) await localItem.save();
             }
@@ -712,16 +753,25 @@ class SyncManager {
         await LocalDbService.partyBox.delete(partySyncId);
       }
 
-      // Fetch and overwrite new Activity Logs
-      final sinceFilter = SettingsService.lastSyncedAt?.toIso8601String();
-      final serverActivities = await ApiService().fetchActivities(since: sinceFilter);
-      for (final log in serverActivities) {
-        // Simple overwrite is safe since logs are immutable
-        await LocalDbService.activityBox.put(log.syncId, log);
-      }
-
+      // Fix D: capture the previous sync window BEFORE updating the timestamp,
+      // then write the timestamp NOW (after core entities succeed) so that a
+      // subsequent failure in the non-critical activities fetch cannot prevent
+      // the timestamp from ever advancing.
+      final prevSyncFilter = SettingsService.lastSyncedAt?.toIso8601String();
       await SettingsService.setLastSyncedAt(DateTime.now());
       debugPrint('[SyncManager] Pull reconcile complete.');
+
+      // Fetch and overwrite new Activity Logs — non-critical.
+      // A failure here does NOT roll back the sync timestamp.
+      try {
+        final serverActivities = await ApiService().fetchActivities(since: prevSyncFilter);
+        for (final log in serverActivities) {
+          // Simple overwrite is safe since logs are immutable
+          await LocalDbService.activityBox.put(log.syncId, log);
+        }
+      } catch (e) {
+        debugPrint('[SyncManager] Activity log sync failed (non-critical): $e');
+      }
 
     } catch (e) {
       debugPrint('[SyncManager] Pull sync failed: $e — using cached local data.');

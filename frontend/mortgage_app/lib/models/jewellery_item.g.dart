@@ -22,17 +22,20 @@ class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
       itemType: fields[2] as String,
       name: fields[3] as String,
       weight: fields[4] as double?,
-      note: fields[5] as String,
+      note: fields[5] == null ? '' : fields[5] as String,
       image: fields[6] as String?,
       syncId: fields[7] as String?,
-      version: fields[8] as int,
+      version: fields[8] == null ? 1 : fields[8] as int,
+      releaseStatus: fields[9] == null ? 'held' : fields[9] as String,
+      releaseDate: fields[10] as String?,
+      releaseNote: fields[11] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, JewelleryItem obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(12)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -50,7 +53,13 @@ class JewelleryItemAdapter extends TypeAdapter<JewelleryItem> {
       ..writeByte(7)
       ..write(obj.syncId)
       ..writeByte(8)
-      ..write(obj.version);
+      ..write(obj.version)
+      ..writeByte(9)
+      ..write(obj.releaseStatus)
+      ..writeByte(10)
+      ..write(obj.releaseDate)
+      ..writeByte(11)
+      ..write(obj.releaseNote);
   }
 
   @override

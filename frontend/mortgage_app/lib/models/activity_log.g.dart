@@ -22,7 +22,7 @@ class ActivityLogAdapter extends TypeAdapter<ActivityLog> {
       entityType: fields[2] as String,
       entityId: fields[3] as int?,
       entitySyncId: fields[4] as String?,
-      entityNameSnapshot: fields[5] as String,
+      entityNameSnapshot: fields[5] == null ? '' : fields[5] as String,
       timestamp: fields[6] as DateTime,
       description: fields[7] as String,
       oldValues: fields[8] as String?,

@@ -16,6 +16,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
   final _addressController = TextEditingController();
   final _noteController = TextEditingController();
   final _interestController = TextEditingController();
+  final _accountNumberController = TextEditingController();
   bool _loading = false;
 
   @override
@@ -25,6 +26,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
     _addressController.dispose();
     _noteController.dispose();
     _interestController.dispose();
+    _accountNumberController.dispose();
     super.dispose();
   }
 
@@ -45,6 +47,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
         phone: _phoneController.text,
         address: _addressController.text,
         note: _noteController.text,
+        accountNumber: _accountNumberController.text.isNotEmpty ? _accountNumberController.text : null,
         defaultInterestRate: _interestController.text.isNotEmpty ? double.tryParse(_interestController.text) : null,
       );
       
@@ -70,6 +73,15 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(labelText: 'Name *', prefixIcon: Icon(Icons.person)),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _accountNumberController,
+              decoration: const InputDecoration(
+                labelText: 'Account Number (Optional)', 
+                prefixIcon: Icon(Icons.tag),
+                helperText: 'Leave blank to auto-generate (e.g., ACC-001)',
+              ),
             ),
             const SizedBox(height: 16),
             TextField(

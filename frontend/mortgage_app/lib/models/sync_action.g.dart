@@ -22,11 +22,11 @@ class SyncActionAdapter extends TypeAdapter<SyncAction> {
       endpoint: fields[2] as String,
       payload: fields[3] as String?,
       timestamp: fields[4] as DateTime,
-      isSyncing: fields[5] as bool,
-      status: fields[6] as String,
-      retryCount: fields[7] as int,
+      isSyncing: fields[5] == null ? false : fields[5] as bool,
+      status: fields[6] == null ? 'pending' : fields[6] as String,
+      retryCount: fields[7] == null ? 0 : fields[7] as int,
       failureReason: fields[8] as String?,
-      idempotencyKey: fields[9] as String?,
+      idempotencyKey: fields[9] == null ? '' : fields[9] as String?,
     );
   }
 
