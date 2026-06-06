@@ -242,7 +242,19 @@ class SyncManager {
         await box.delete(action.id);
         debugPrint('[SyncManager] ✓ ${action.method} ${action.endpoint}');
       } catch (e) {
-        if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:') || e.message.startsWith('CONFLICT_400:'))) {
+        if (e.toString().contains('Parent entry not yet synced') ||
+            e.toString().contains('Parent party not yet synced')) {
+          // ↷ Deferred dependency wait — not a failure.
+          // The action was never sent to the server; no retry slot should be consumed.
+          // Status reverts to pending so the UI shows it as a normal waiting item,
+          // not an error. Next sync cycle will re-evaluate once the parent has a real ID.
+          action.status        = SyncStatus.pending;
+          action.isSyncing     = false;
+          action.failureReason = 'Waiting for parent record to sync first';
+          await action.save();
+          debugPrint('[SyncManager] ↷ Deferred ${action.endpoint} — parent not yet synced (retryCount unchanged: ${action.retryCount})');
+          continue;
+        } else if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:') || e.message.startsWith('CONFLICT_400:'))) {
           // 409/404/400 conflicts are unrecoverable (e.g. duplicate POST, stale delete, bad action choice).
           // Abandon this action so it doesn't block the rest of the queue forever.
           action.status        = SyncStatus.conflict;
@@ -268,10 +280,6 @@ class SyncManager {
           }
 
           // Stop on first transient failure in this list — next cycle will retry from here
-          if (e.toString().contains('Parent entry not yet synced') || e.toString().contains('Parent party not yet synced')) {
-            debugPrint('[SyncManager] Skipping child action until parent syncs: ${action.endpoint}');
-            continue;
-          }
           break;
         }
       }
