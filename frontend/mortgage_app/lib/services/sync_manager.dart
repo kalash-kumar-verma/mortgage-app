@@ -240,8 +240,8 @@ class SyncManager {
         await box.delete(action.id);
         debugPrint('[SyncManager] ✓ ${action.method} ${action.endpoint}');
       } catch (e) {
-        if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:'))) {
-          // 409/404 conflicts are unrecoverable (e.g. duplicate POST, stale delete).
+        if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:') || e.message.startsWith('CONFLICT_400:'))) {
+          // 409/404/400 conflicts are unrecoverable (e.g. duplicate POST, stale delete, bad action choice).
           // Abandon this action so it doesn't block the rest of the queue forever.
           action.status        = SyncStatus.conflict;
           action.isSyncing     = false;
@@ -328,6 +328,20 @@ class SyncManager {
       }
     }
 
+    // Map invalid frontend ActivityLog actions to valid backend generic choices
+    if (action.endpoint == 'activities/' && payloadMap != null && payloadMap.containsKey('action')) {
+      final act = payloadMap['action'].toString();
+      if (act == 'ADD_ITEM') {
+        payloadMap['action'] = 'CREATE';
+      } else if (act == 'RELEASE_ITEM' || act == 'EDIT_ITEM') {
+        payloadMap['action'] = 'EDIT';
+      } else if (act == 'DELETE_ITEM') {
+        payloadMap['action'] = 'DELETE';
+      } else if (act == 'UPDATE_PROFILE') {
+        payloadMap['action'] = 'PROFILE';
+      }
+    }
+
     // ── Resolve UUID in endpoint → real integer ID ──
     // e.g. "entries/{syncId}/withdraw/" → "entries/42/withdraw/"
     String endpoint = action.endpoint;
@@ -400,7 +414,17 @@ class SyncManager {
          if (body.values.any((v) => v.toString().contains('object does not exist'))) {
            throw const FormatException('CONFLICT_404:Parent deleted on server.');
          }
-      } catch (_) {}
+         
+         // Only force-abandon 400s for activities if it's a validation error about the action enum
+         if (action.endpoint.startsWith('activities/')) {
+           final bodyStr = response.body.toLowerCase();
+           if (bodyStr.contains('is not a valid choice') || bodyStr.contains('invalid choice')) {
+             throw FormatException('CONFLICT_400:Validation error on activity action: ${response.body}');
+           }
+         }
+      } catch (e) {
+         if (e is FormatException) rethrow;
+      }
     }
 
     // 404 on DELETE = already deleted on server → treat as success
