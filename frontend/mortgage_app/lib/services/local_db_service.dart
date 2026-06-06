@@ -665,7 +665,15 @@ class LocalDbService {
     if (item.id != null && item.id! > 0) {
       await _queueAction('PATCH', 'items/${item.id}/?version=${item.version}', payload);
     } else {
-      await _upsertOfflinePost('items/', item.syncId, item.toJson());
+      final json = item.toJson();
+      // Restore entry_sync_id so _postItem can resolve the real parent ID during sync.
+      // We look up the parent entry using the item's current offline negative ID.
+      final parentEntry = entryBox.values.cast<Entry?>()
+          .firstWhere((e) => e?.id == item.entry, orElse: () => null);
+      if (parentEntry?.syncId != null) {
+        json['entry_sync_id'] = parentEntry!.syncId;
+      }
+      await _upsertOfflinePost('items/', item.syncId, json);
     }
 
     await logActivity(
