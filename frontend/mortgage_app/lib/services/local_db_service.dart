@@ -289,6 +289,43 @@ class LocalDbService {
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
+  static List<SyncAction> getAbandonedActions() {
+    return syncBox.values
+        .where((a) => a.isAbandoned)
+        .toList()
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp)); // newest first
+  }
+
+  static Set<String> getQuarantinedSyncIds() {
+    final quarantined = <String>{};
+    for (final action in syncBox.values.where((a) => a.isAbandoned)) {
+      if (action.payload != null) {
+        try {
+          final m = jsonDecode(action.payload!);
+          for (final key in ['sync_id', 'party_sync_id', 'entry_sync_id']) {
+            final v = m[key];
+            if (v != null) quarantined.add(v.toString());
+          }
+        } catch (_) {}
+      }
+      
+      final uuidRx = RegExp(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
+      final uuidMatch = uuidRx.firstMatch(action.endpoint);
+      if (uuidMatch != null) quarantined.add(uuidMatch.group(0)!);
+
+      final intIdRx = RegExp(r'(?:parties|entries|items|payments)/(\d+)(?:/|$)');
+      final intMatch = intIdRx.firstMatch(action.endpoint);
+      if (intMatch != null) quarantined.add(intMatch.group(1)!);
+    }
+    return quarantined;
+  }
+
+  static bool isQuarantined(String? syncId) {
+    if (syncId == null) return false;
+    return getQuarantinedSyncIds().contains(syncId);
+  }
+
+
   // ─── Activity Log ────────────────────────────────────────────────────────
 
   static Future<void> logActivity({
@@ -663,6 +700,21 @@ class LocalDbService {
     };
 
     if (item.id != null && item.id! > 0) {
+      // Deduplicate: remove any existing PATCH for this item before queueing a new one.
+      // Prevents stale-version 409 conflicts when releaseItem() is called more than once
+      // before the first PATCH has synced (e.g. rapid double-tap, retry after reconnect).
+      // This matches the deduplication pattern already used in saveParty() and saveEntry().
+      final itemEndpointPrefix = 'items/${item.id}/';
+      final keysToRemove = <dynamic>[];
+      for (final key in syncBox.keys) {
+        final existing = syncBox.get(key);
+        if (existing != null &&
+            existing.method == 'PATCH' &&
+            existing.endpoint.startsWith(itemEndpointPrefix)) {
+          keysToRemove.add(key);
+        }
+      }
+      if (keysToRemove.isNotEmpty) await syncBox.deleteAll(keysToRemove);
       await _queueAction('PATCH', 'items/${item.id}/?version=${item.version}', payload);
     } else {
       final json = item.toJson();

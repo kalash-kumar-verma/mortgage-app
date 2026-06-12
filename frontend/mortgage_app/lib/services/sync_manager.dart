@@ -556,6 +556,12 @@ class SyncManager {
           // remains visible in UI queries (which filter by entry integer ID).
           final serverEntryId = data['entry'] as int?;
           if (serverEntryId != null && serverEntryId > 0) i.entry = serverEntryId;
+          // Fix B: sync local version with the server-assigned version immediately
+          // after POST. Ensures any subsequent releaseItem() PATCH sends the correct
+          // base version. Without this, a migrated/restored item that starts at
+          // version > 1 on the server would cause an immediate 409 on first release.
+          final serverVersion = data['version'] as int?;
+          if (serverVersion != null && serverVersion > i.version) i.version = serverVersion;
           await LocalDbService.itemBox.put(syncId, i);
         }
       } else if (endpoint == 'payments/') {
@@ -591,6 +597,7 @@ class SyncManager {
       //   B) Records already synced but with a pending edit/delete: identified by
       //      integer server ID in endpoint (e.g. "entries/42/", "parties/7/").
       final pendingSyncIds = <String>{};
+      final quarantinedSyncIds = <String>{}; // Fix: Separate protection set for abandoned actions
       pendingSyncIds.addAll(_recentlyResolvedSyncIds); // Fix B: Protect newly resolved records
       // Regex for UUID (class A — unsynced records)
       final uuidRx = RegExp(
@@ -599,7 +606,7 @@ class SyncManager {
       final intIdRx = RegExp(r'(?:parties|entries|items|payments)/(\d+)(?:/|$)');
 
       for (final action in LocalDbService.syncBox.values) {
-        if (action.isAbandoned) continue;
+        final targetSet = action.isAbandoned ? quarantinedSyncIds : pendingSyncIds;
 
         // ── Class A: extract sync_id / party_sync_id / entry_sync_id from payload ──
         if (action.payload != null) {
@@ -607,20 +614,18 @@ class SyncManager {
             final m = jsonDecode(action.payload!) as Map<String, dynamic>;
             for (final key in ['sync_id', 'party_sync_id', 'entry_sync_id']) {
               final v = m[key];
-              if (v != null) pendingSyncIds.add(v.toString());
+              if (v != null) targetSet.add(v.toString());
             }
           } catch (_) {}
         }
 
         // ── Class A: UUID in endpoint (e.g. "entries/{uuid}/withdraw/") ──
         final uuidMatch = uuidRx.firstMatch(action.endpoint);
-        if (uuidMatch != null) pendingSyncIds.add(uuidMatch.group(0)!);
+        if (uuidMatch != null) targetSet.add(uuidMatch.group(0)!);
 
         // ── Class B: integer server ID in endpoint (e.g. "entries/42/") ──
-        // Stored as the string representation so downstream comparisons work:
-        //   hasPendingOp = pendingSyncIds.contains(localEntry.id.toString())
         final intMatch = intIdRx.firstMatch(action.endpoint);
-        if (intMatch != null) pendingSyncIds.add(intMatch.group(1)!);
+        if (intMatch != null) targetSet.add(intMatch.group(1)!);
       }
 
       final serverParties = await ApiService().fetchParties();
@@ -641,8 +646,10 @@ class SyncManager {
           
           final hasPendingOp = pendingSyncIds.contains(localParty.syncId) || 
                                (localParty.id != null && pendingSyncIds.contains(localParty.id.toString()));
+          final isQuarantined = quarantinedSyncIds.contains(localParty.syncId) ||
+                                (localParty.id != null && quarantinedSyncIds.contains(localParty.id.toString()));
           
-          if (!hasPendingOp) {
+          if (!hasPendingOp && !isQuarantined) {
             if (localParty.name != serverParty.name)       { localParty.name = serverParty.name; dirty = true; }
             if (localParty.phone != serverParty.phone)     { localParty.phone = serverParty.phone; dirty = true; }
             if (localParty.address != serverParty.address) { localParty.address = serverParty.address; dirty = true; }
@@ -669,8 +676,10 @@ class SyncManager {
             
             final hasPendingOp = pendingSyncIds.contains(localEntry.syncId) || 
                                  (localEntry.id != null && pendingSyncIds.contains(localEntry.id.toString()));
+            final isQuarantined = quarantinedSyncIds.contains(localEntry.syncId) ||
+                                  (localEntry.id != null && quarantinedSyncIds.contains(localEntry.id.toString()));
                                  
-            if (!hasPendingOp) {
+            if (!hasPendingOp && !isQuarantined) {
               if (localEntry.status != serverEntry.status)                   { localEntry.status = serverEntry.status; dirty = true; }
               if (localEntry.version < serverEntry.version)                  { localEntry.version = serverEntry.version; dirty = true; }
               if (localEntry.closedAt != serverEntry.closedAt)              { localEntry.closedAt = serverEntry.closedAt; dirty = true; }
@@ -700,8 +709,10 @@ class SyncManager {
               
               final hasPendingOp = pendingSyncIds.contains(localItem.syncId) || 
                                    (localItem.id != null && pendingSyncIds.contains(localItem.id.toString()));
+              final isQuarantined = quarantinedSyncIds.contains(localItem.syncId) ||
+                                    (localItem.id != null && quarantinedSyncIds.contains(localItem.id.toString()));
                                    
-              if (!hasPendingOp) {
+              if (!hasPendingOp && !isQuarantined) {
                 if (localItem.version < serverItem.version)                 { localItem.version = serverItem.version; dirty = true; }
                 if (localItem.name != serverItem.name)                      { localItem.name = serverItem.name; dirty = true; }
                 if (localItem.note != serverItem.note)                      { localItem.note = serverItem.note; dirty = true; }
@@ -722,6 +733,7 @@ class SyncManager {
             if (serverItemSyncIds.contains(itemSyncId)) continue;
             if (LocalDbService.isTombstoned(itemSyncId)) continue;
             if (pendingSyncIds.contains(itemSyncId)) continue;
+            if (quarantinedSyncIds.contains(itemSyncId)) continue;
             debugPrint('[SyncManager] Reconcile: removing item $itemSyncId (deleted on server)');
             await localItem.delete();
           }
@@ -743,8 +755,10 @@ class SyncManager {
               
               final hasPendingOp = pendingSyncIds.contains(localPayment.syncId) || 
                                    (localPayment.id != null && pendingSyncIds.contains(localPayment.id.toString()));
+              final isQuarantined = quarantinedSyncIds.contains(localPayment.syncId) ||
+                                    (localPayment.id != null && quarantinedSyncIds.contains(localPayment.id.toString()));
                                    
-              if (!hasPendingOp) {
+              if (!hasPendingOp && !isQuarantined) {
                 if (localPayment.amount != serverPayment.amount) { localPayment.amount = serverPayment.amount; dirty = true; }
                 if (localPayment.note != serverPayment.note) { localPayment.note = serverPayment.note; dirty = true; }
               }
@@ -758,6 +772,7 @@ class SyncManager {
             if (serverPaymentSyncIds.contains(paymentSyncId)) continue;
             if (LocalDbService.isTombstoned(paymentSyncId)) continue;
             if (pendingSyncIds.contains(paymentSyncId)) continue;
+            if (quarantinedSyncIds.contains(paymentSyncId)) continue;
             debugPrint('[SyncManager] Reconcile: removing payment $paymentSyncId (deleted on server)');
             await localPayment.delete();
           }
@@ -770,6 +785,7 @@ class SyncManager {
           if (serverEntrySyncIds.contains(entrySyncId)) continue;
           if (LocalDbService.isTombstoned(entrySyncId)) continue;
           if (pendingSyncIds.contains(entrySyncId)) continue;
+          if (quarantinedSyncIds.contains(entrySyncId)) continue;
           debugPrint('[SyncManager] Reconcile: removing entry $entrySyncId (deleted on server)');
           for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (localEntry.id ?? -1)).toList()) {
             await item.delete();
@@ -784,6 +800,7 @@ class SyncManager {
         if (serverPartySyncIds.contains(partySyncId)) continue;
         if (LocalDbService.isTombstoned(partySyncId)) continue;
         if (pendingSyncIds.contains(partySyncId)) continue;
+        if (quarantinedSyncIds.contains(partySyncId)) continue;
         debugPrint('[SyncManager] Reconcile: removing party $partySyncId (deleted on server)');
         for (final entry in LocalDbService.entryBox.values.where((e) => e.party == (localParty.id ?? -1)).toList()) {
           for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (entry.id ?? -1)).toList()) {

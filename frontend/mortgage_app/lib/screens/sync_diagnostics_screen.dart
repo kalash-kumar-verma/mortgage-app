@@ -6,6 +6,7 @@ import '../services/sync_manager.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'abandoned_actions_screen.dart';
 
 class SyncDiagnosticsScreen extends StatefulWidget {
   const SyncDiagnosticsScreen({super.key});
@@ -33,16 +34,11 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
     if (mounted) setState(() => _isSyncing = false);
   }
 
-  void _clearAbandoned() {
-    final box = LocalDbService.syncBox;
-    final keys = box.values.where((a) => a.isAbandoned).map((a) => a.id).toList();
-    if (keys.isNotEmpty) {
-      box.deleteAll(keys);
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cleared ${keys.length} abandoned operations')),
-      );
-    }
+  void _reviewConflicts() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const AbandonedActionsScreen()),
+    );
   }
 
   Future<void> _handleConflict(SyncAction action) async {
@@ -267,9 +263,9 @@ class _SyncDiagnosticsScreenState extends State<SyncDiagnosticsScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: stats['abandoned']! > 0 ? _clearAbandoned : null,
-                    icon: const Icon(Icons.delete_sweep),
-                    label: const Text('Clear Abandoned'),
+                    onPressed: stats['abandoned']! > 0 ? _reviewConflicts : null,
+                    icon: const Icon(Icons.warning_amber),
+                    label: const Text('Review Conflicts'),
                   ),
                 ),
               ],

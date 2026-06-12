@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
 import '../services/sync_manager.dart';
 import '../models/entry.dart';
+import '../widgets/conflict_badge.dart';
 import 'entry_detail_screen.dart';
 import 'sync_diagnostics_screen.dart';
 import 'filtered_entry_list_screen.dart';
@@ -377,6 +379,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
               ),
+              if (LocalDbService.isQuarantined(e.syncId))
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: ConflictBadge(),
+                ),
               // Status chip
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

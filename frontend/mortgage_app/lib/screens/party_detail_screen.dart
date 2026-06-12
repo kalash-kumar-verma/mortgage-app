@@ -5,6 +5,7 @@ import '../models/entry.dart';
 import '../services/local_db_service.dart';
 import '../services/sync_manager.dart';
 import '../models/sync_action.dart';
+import '../widgets/conflict_badge.dart';
 import 'add_entry_screen.dart';
 import 'entry_detail_screen.dart';
 
@@ -208,40 +209,16 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                           style: TextStyle(fontSize: 11, color: _statusColor(e.status), fontWeight: FontWeight.w600),
                                         ),
                                       ),
-                                      ValueListenableBuilder<int>(
-                                        valueListenable: SyncManager().pendingCountNotifier,
-                                        builder: (context, _, __) {
-                                          bool hasConflict = false;
-                                          bool hasPending = false;
-                                          if (e.id == null) hasPending = true;
-
-                                          for (final action in LocalDbService.syncBox.values) {
-                                            if (action.isAbandoned) continue;
-                                            if ((e.syncId != null && action.endpoint.contains(e.syncId!)) ||
-                                                (e.id != null && action.endpoint.contains(e.id.toString()))) {
-                                              if (action.status == SyncStatus.conflict) {
-                                                hasConflict = true;
-                                              } else {
-                                                hasPending = true;
-                                              }
-                                            }
-                                          }
-
-                                          if (hasConflict) {
-                                            return const Padding(
-                                              padding: EdgeInsets.only(left: 8),
-                                              child: Icon(Icons.error, size: 14, color: Colors.red),
-                                            );
-                                          }
-                                          if (hasPending) {
-                                            return const Padding(
-                                              padding: EdgeInsets.only(left: 8),
-                                              child: Icon(Icons.cloud_upload, size: 14, color: Colors.blue),
-                                            );
-                                          }
-                                          return const SizedBox.shrink();
-                                        },
-                                      ),
+                                      if (LocalDbService.isQuarantined(e.syncId))
+                                        const Padding(
+                                          padding: EdgeInsets.only(left: 8),
+                                          child: ConflictBadge(),
+                                        )
+                                      else if (e.id == null)
+                                        const Padding(
+                                          padding: EdgeInsets.only(left: 8),
+                                          child: Icon(Icons.cloud_upload_outlined, size: 16, color: Colors.orange),
+                                        ),
                                     ],
                                   ),
                                   subtitle: Column(

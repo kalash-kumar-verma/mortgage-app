@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/entry.dart';
 import '../models/jewellery_item.dart';
+import '../widgets/conflict_badge.dart';
 import '../models/partial_payment.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
@@ -448,6 +449,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 title: Row(
                   children: [
                     Expanded(child: Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    if (LocalDbService.isQuarantined(item.syncId))
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8),
+                        child: ConflictBadge(),
+                      ),
                     if (item.releaseStatus != 'held')
                       Container(
                         margin: const EdgeInsets.only(left: 8),
@@ -652,7 +658,16 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 backgroundColor: Colors.green,
                 child: Icon(Icons.currency_rupee, color: Colors.white, size: 18),
               ),
-              title: Text('₹${p.amount}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              title: Row(
+                children: [
+                  Expanded(child: Text('₹${p.amount}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                  if (LocalDbService.isQuarantined(p.syncId))
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8),
+                      child: ConflictBadge(),
+                    ),
+                ],
+              ),
               subtitle: Text(
                 '${p.date}${p.note.isNotEmpty ? '\n${p.note}' : ''}',
                 style: const TextStyle(fontSize: 12),

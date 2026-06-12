@@ -3,6 +3,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../models/party.dart';
 import '../services/local_db_service.dart';
 import '../services/sync_manager.dart';
+import '../widgets/conflict_badge.dart';
 import 'add_party_screen.dart';
 import 'party_detail_screen.dart';
 
@@ -181,7 +182,12 @@ class _PartyScreenState extends State<PartyScreen> {
                         title: Row(
                           children: [
                             Expanded(child: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold))),
-                            if (p.id == null) // Show sync icon if not synced to server yet
+                            if (LocalDbService.isQuarantined(p.syncId))
+                              const Padding(
+                                padding: EdgeInsets.only(right: 8),
+                                child: ConflictBadge(),
+                              ),
+                            if (p.id == null && !LocalDbService.isQuarantined(p.syncId)) // Show sync icon if not synced to server yet
                               const Icon(Icons.cloud_upload_outlined, size: 16, color: Colors.orange),
                           ],
                         ),
