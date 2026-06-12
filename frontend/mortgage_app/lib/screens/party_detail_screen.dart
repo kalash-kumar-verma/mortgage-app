@@ -3,6 +3,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../models/party.dart';
 import '../models/entry.dart';
 import '../services/local_db_service.dart';
+import '../services/settings_service.dart';
 import '../services/sync_manager.dart';
 import '../models/sync_action.dart';
 import '../widgets/conflict_badge.dart';
@@ -251,10 +252,12 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                         ),
                                     ],
                                   ),
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                    onPressed: () => _deleteEntry(e),
-                                  ),
+                                  trailing: SettingsService.role == 'owner'
+                                      ? IconButton(
+                                          icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                          onPressed: () => _deleteEntry(e),
+                                        )
+                                      : null,
                                   isThreeLine: true,
                                 ),
                               );

@@ -62,6 +62,9 @@ class SettingsService {
     return _box.put('username', username);
   }
 
+  static String get role => _box.get('role', defaultValue: 'owner');
+  static Future<void> setRole(String role) => _box.put('role', role);
+
   // ─── Display ────────────────────────────────────────────────────
   static String get businessName =>
       _box.get('businessName', defaultValue: 'Jewellery Mortgage');

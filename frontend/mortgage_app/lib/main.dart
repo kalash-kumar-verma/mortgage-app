@@ -214,12 +214,26 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    DashboardScreen(),
-    PartyScreen(),
-    SearchScreen(),
-    SettingsScreen(),
-  ];
+  late final List<Widget> _screens;
+  late final List<NavigationDestination> _destinations;
+
+  @override
+  void initState() {
+    super.initState();
+    final isOwner = SettingsService.role == 'owner';
+    _screens = [
+      const DashboardScreen(),
+      const PartyScreen(),
+      const SearchScreen(),
+      if (isOwner) const SettingsScreen(),
+    ];
+    _destinations = [
+      const NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Dashboard'),
+      const NavigationDestination(icon: Icon(Icons.people_outlined), selectedIcon: Icon(Icons.people), label: 'Parties'),
+      const NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search), label: 'Search'),
+      if (isOwner) const NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -229,12 +243,7 @@ class _MainShellState extends State<MainShell> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (i) => setState(() => _currentIndex = i),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-            NavigationDestination(icon: Icon(Icons.people_outlined), selectedIcon: Icon(Icons.people), label: 'Parties'),
-            NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search), label: 'Search'),
-            NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
-          ],
+          destinations: _destinations,
         ),
       ),
     );

@@ -43,10 +43,11 @@ class JewelleryItemSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
+    role = serializers.CharField(read_only=True)
     
     class Meta:
         model = UserProfile
-        fields = ['phone', 'avatar_url', 'business_metadata', 'username', 'email']
+        fields = ['phone', 'avatar_url', 'business_metadata', 'username', 'email', 'role']
 
 
 class PartialPaymentSerializer(serializers.ModelSerializer):

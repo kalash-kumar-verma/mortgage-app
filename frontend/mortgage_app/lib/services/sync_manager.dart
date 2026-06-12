@@ -254,7 +254,7 @@ class SyncManager {
           await action.save();
           debugPrint('[SyncManager] ↷ Deferred ${action.endpoint} — parent not yet synced (retryCount unchanged: ${action.retryCount})');
           continue;
-        } else if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:') || e.message.startsWith('CONFLICT_400:'))) {
+        } else if (e is FormatException && (e.message.startsWith('CONFLICT_409:') || e.message.startsWith('CONFLICT_404:') || e.message.startsWith('CONFLICT_400:') || e.message.startsWith('CONFLICT_403:'))) {
           // 409/404/400 conflicts are unrecoverable (e.g. duplicate POST, stale delete, bad action choice).
           // Abandon this action so it doesn't block the rest of the queue forever.
           action.status        = SyncStatus.conflict;
@@ -442,6 +442,9 @@ class SyncManager {
     }
 
     // 404 on DELETE = already deleted on server → treat as success
+    if (response.statusCode == 403) {
+      throw const FormatException('CONFLICT_403:Permission Denied by Server.');
+    }
     final isDeleteNotFound = action.method.toUpperCase() == 'DELETE' &&
         response.statusCode == 404;
     if (!isDeleteNotFound && response.statusCode >= 400) {

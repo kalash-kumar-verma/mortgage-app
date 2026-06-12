@@ -4,7 +4,13 @@ from datetime import date, timedelta
 import uuid
 
 class UserProfile(models.Model):
+    ROLE_CHOICES = [
+        ('owner', 'Owner'),
+        ('manager', 'Manager'),
+        ('staff', 'Staff'),
+    ]
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='owner')
     phone = models.CharField(max_length=15, blank=True)
     avatar_url = models.URLField(blank=True, null=True)
     business_metadata = models.JSONField(default=dict, blank=True)

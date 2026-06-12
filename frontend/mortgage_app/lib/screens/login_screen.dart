@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../services/settings_service.dart';
 import '../services/local_db_service.dart';
 import '../services/sync_manager.dart';
+import '../services/api_service.dart';
 import '../main.dart';
 import 'settings_screen.dart';
 import 'register_screen.dart';
@@ -53,6 +54,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
         await SettingsService.setToken(token);
         await SettingsService.setUsername(username);
+
+        // Fetch user profile to get role
+        try {
+          final api = ApiService();
+          final profile = await api.fetchProfile();
+          final role = profile['role'] as String? ?? 'owner';
+          await SettingsService.setRole(role);
+        } catch (_) {
+          // Fallback if profile fetch fails
+          await SettingsService.setRole('owner');
+        }
 
         // Set user namespace and open user-scoped Hive boxes BEFORE navigating
         LocalDbService.setUserNamespace(username);

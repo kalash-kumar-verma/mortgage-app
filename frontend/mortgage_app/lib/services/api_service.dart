@@ -21,6 +21,7 @@ class ApiService {
   }
 
   // ─── Auth ───────────────────────────────────────────────────
+
   Future<void> logoutAllDevices() async {
     final response = await http.post(Uri.parse('$baseUrl/auth/logout_all/'), headers: _headers);
     if (response.statusCode == 200) {

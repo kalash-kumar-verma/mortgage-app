@@ -8,6 +8,7 @@ import '../widgets/conflict_badge.dart';
 import '../models/partial_payment.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
+import '../services/settings_service.dart';
 import 'add_item_screen.dart';
 import 'edit_entry_screen.dart';
 import 'withdraw_screen.dart';
@@ -513,10 +514,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                               tooltip: 'Release Item',
                               onPressed: () => _showReleaseDialog(item),
                             ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.red),
-                            onPressed: () => _deleteItem(item),
-                          ),
+                          if (SettingsService.role == 'owner')
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.red),
+                              onPressed: () => _deleteItem(item),
+                            ),
                         ],
                       )
                     : null,

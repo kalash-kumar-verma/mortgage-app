@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/party.dart';
 import '../services/local_db_service.dart';
+import '../services/settings_service.dart';
 import '../services/sync_manager.dart';
 import '../widgets/conflict_badge.dart';
 import 'add_party_screen.dart';
@@ -200,10 +201,12 @@ class _PartyScreenState extends State<PartyScreen> {
                                 ],
                               )
                             : null,
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                          onPressed: () => _deleteParty(p),
-                        ),
+                        trailing: SettingsService.role == 'owner'
+                            ? IconButton(
+                                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                onPressed: () => _deleteParty(p),
+                              )
+                            : null,
                         onTap: () {
                           Navigator.push(context, MaterialPageRoute(builder: (_) => PartyDetailScreen(party: p)));
                         },
