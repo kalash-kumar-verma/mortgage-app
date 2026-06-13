@@ -4,6 +4,12 @@ import 'package:intl/intl.dart';
 
 import '../services/analytics_service.dart';
 import '../services/report_export_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import '../services/local_db_service.dart';
+import '../services/pdf_receipt_service.dart';
+import '../models/entry.dart';
+import '../models/party.dart';
+import '../models/jewellery_item.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -82,6 +88,74 @@ class _ReportsScreenState extends State<ReportsScreen> {
       rangeLabel = '${DateFormat('MMM d, yyyy').format(_startDate!)} - ${DateFormat('MMM d, yyyy').format(_endDate!)}';
     }
     ReportExportService.exportToCsv(_metrics, _topCustomers, rangeLabel);
+  }
+
+  Future<void> _exportAuditRegister(bool asPdf) async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      helpText: 'Select Audit Period',
+    );
+
+    if (picked == null) return;
+
+    final start = picked.start;
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day, 23, 59, 59);
+    final rangeLabel = '${DateFormat('MMM d, yyyy').format(start)} - ${DateFormat('MMM d, yyyy').format(end)}';
+
+    final entryBox = Hive.box<Entry>(LocalDbService.entryBoxName);
+    final partyBox = Hive.box<Party>(LocalDbService.partyBoxName);
+    final itemBox = Hive.box<JewelleryItem>(LocalDbService.itemBoxName);
+
+    List<Entry> newPledges = [];
+    List<Entry> releasedLoans = [];
+    Map<int, String> partyNames = {};
+    Map<int, String> partyPhones = {};
+    Map<int, String> entryItems = {};
+
+    for (var entry in entryBox.values) {
+      if (entry.status == 'DELETED') continue;
+
+      // Check New Pledges
+      final eDate = DateTime.tryParse(entry.date);
+      if (eDate != null && eDate.isAfter(start) && eDate.isBefore(end)) {
+        newPledges.add(entry);
+      }
+
+      // Check Released
+      if ((entry.status == 'WITHDRAWN' || entry.status == 'CLOSED') && entry.closedAt != null) {
+        final cDate = DateTime.tryParse(entry.closedAt!);
+        if (cDate != null && cDate.isAfter(start) && cDate.isBefore(end)) {
+          releasedLoans.add(entry);
+        }
+      }
+
+      // Pre-fetch names
+      if (!partyNames.containsKey(entry.party)) {
+        final p = partyBox.get(entry.party);
+        if (p != null) {
+          partyNames[p.id!] = p.name;
+          partyPhones[p.id!] = p.phone;
+        }
+      }
+
+      // Pre-fetch items
+      if (!entryItems.containsKey(entry.id)) {
+        final items = itemBox.values.where((i) => i.entry == entry.id).toList();
+        final desc = items.map((i) => '${i.name} (${i.weight ?? '-'}g)').join(', ');
+        entryItems[entry.id!] = desc;
+      }
+    }
+
+    newPledges.sort((a, b) => a.date.compareTo(b.date));
+    releasedLoans.sort((a, b) => (a.closedAt ?? '').compareTo(b.closedAt ?? ''));
+
+    if (asPdf) {
+      await PdfReceiptService.shareAuditRegisterPdf(rangeLabel, newPledges, releasedLoans, partyNames, partyPhones, entryItems);
+    } else {
+      await ReportExportService.exportAuditRegisterCsv(rangeLabel, newPledges, releasedLoans, partyNames, partyPhones, entryItems);
+    }
   }
 
   Widget _buildSummaryCard(String title, String value, IconData icon, Color color) {
@@ -213,6 +287,54 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  Widget _buildAuditRegister() {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.blue.shade200, width: 2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.assignment_turned_in, color: Colors.blue.shade700),
+                const SizedBox(width: 8),
+                const Text('Audit Register (Khatabook)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Chronological ledger of all new pledges and released loans for compliance and audit.', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _exportAuditRegister(false),
+                    icon: const Icon(Icons.table_chart),
+                    label: const Text('Export CSV'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _exportAuditRegister(true),
+                    icon: const Icon(Icons.picture_as_pdf),
+                    label: const Text('Export PDF'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700, foregroundColor: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -277,6 +399,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: _buildTopCustomers(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: _buildAuditRegister(),
             ),
           ),
           const SliverToBoxAdapter(child: SizedBox(height: 40)),

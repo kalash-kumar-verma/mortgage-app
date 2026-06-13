@@ -207,4 +207,111 @@ class PdfReceiptService {
       child: pw.Text(text, style: const pw.TextStyle(fontSize: 10)),
     );
   }
+
+  static Future<void> shareAuditRegisterPdf(
+      String rangeLabel,
+      List<Entry> newPledges,
+      List<Entry> releasedLoans,
+      Map<int, String> partyNames,
+      Map<int, String> partyPhones,
+      Map<int, String> entryItems) async {
+    final pdf = pw.Document();
+    final businessName = SettingsService.businessName;
+
+    pw.Widget buildSectionHeader(String title) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(top: 16, bottom: 8),
+        child: pw.Text(title, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.blue800)),
+      );
+    }
+
+    pw.Widget buildTable(List<Entry> entries, bool isReleased) {
+      if (entries.isEmpty) return pw.Text('No records found for this period.', style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey));
+
+      return pw.Table(
+        border: pw.TableBorder.all(color: PdfColors.grey300),
+        columnWidths: {
+          0: const pw.FlexColumnWidth(1.2),
+          1: const pw.FlexColumnWidth(1.2),
+          2: const pw.FlexColumnWidth(2),
+          3: const pw.FlexColumnWidth(2.5),
+          4: const pw.FlexColumnWidth(1.5),
+          5: const pw.FlexColumnWidth(1.5),
+        },
+        children: [
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+            children: [
+              _tableHeader(isReleased ? 'Release Date' : 'Pledge Date'),
+              _tableHeader('SR No.'),
+              _tableHeader('Customer Details'),
+              _tableHeader('Items'),
+              _tableHeader(isReleased ? 'Principal + Interest' : 'Principal (₹)'),
+              _tableHeader('Status'),
+            ],
+          ),
+          ...entries.map((e) {
+            final name = partyNames[e.party] ?? e.partyName;
+            final phone = partyPhones[e.party] ?? '';
+            final items = entryItems[e.id ?? 0] ?? '';
+            
+            String dateCol = isReleased ? (e.closedAt ?? e.date) : e.date;
+            String amountCol = isReleased ? '₹${e.amount} + ₹${e.effectiveTotalPaid - (double.tryParse(e.amount) ?? 0)}' : '₹${e.amount}';
+
+            return pw.TableRow(
+              children: [
+                _tableCell(dateCol),
+                _tableCell(e.srNumber),
+                _tableCell('$name\n$phone'),
+                _tableCell(items),
+                _tableCell(amountCol),
+                _tableCell(e.status),
+              ],
+            );
+          }),
+        ],
+      );
+    }
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(32),
+        build: (context) {
+          return [
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(businessName, style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('Audit Register (Khatabook)', style: pw.TextStyle(fontSize: 14, color: PdfColors.grey700)),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text('Generated: ${DateTime.now().toString().split('.')[0]}', style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                    pw.Text('Period: $rangeLabel', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                  ],
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 16),
+            buildSectionHeader('Section 1: New Pledges (Cash Out)'),
+            buildTable(newPledges, false),
+            pw.SizedBox(height: 24),
+            buildSectionHeader('Section 2: Released Loans (Cash In)'),
+            buildTable(releasedLoans, true),
+          ];
+        },
+      ),
+    );
+
+    await Printing.sharePdf(
+      bytes: await pdf.save(),
+      filename: 'audit_register_${DateTime.now().millisecondsSinceEpoch}.pdf',
+    );
+  }
 }
