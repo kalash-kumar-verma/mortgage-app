@@ -46,11 +46,26 @@ class EntrySerializer(serializers.ModelSerializer):
                         )
         return super().update(instance, validated_data)
 
+    def validate_party(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            # Phase 2.5: Enforce ownership on creation
+            if value.owner != request.user:
+                raise serializers.ValidationError("You do not have permission to create an entry for this party.")
+        return value
+
 
 class JewelleryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = JewelleryItem
         fields = '__all__'
+
+    def validate_entry(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if value.party.owner != request.user:
+                raise serializers.ValidationError("You do not have permission to create an item for this entry.")
+        return value
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -67,6 +82,13 @@ class PartialPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = PartialPayment
         fields = '__all__'
+
+    def validate_entry(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if value.party.owner != request.user:
+                raise serializers.ValidationError("You do not have permission to create a payment for this entry.")
+        return value
 
 class ActivityLogSerializer(serializers.ModelSerializer):
     class Meta:
