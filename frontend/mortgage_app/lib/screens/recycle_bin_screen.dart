@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/local_db_service.dart';
+import '../services/settings_service.dart';
 
 /// Shows locally tombstoned (soft-deleted) records.
 /// Records here were deleted on this device but may still exist on the server
@@ -155,17 +156,18 @@ class _RecycleBinScreenState extends State<RecycleBinScreen>
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (r.hasPayload)
+            if (r.hasPayload && SettingsService.role == 'owner')
               IconButton(
                 icon: const Icon(Icons.restore, color: Colors.blue),
                 tooltip: 'Restore',
                 onPressed: () => _handleRestore(r),
               ),
-            IconButton(
-              icon: const Icon(Icons.delete_forever, color: Colors.red),
-              tooltip: 'Permanently Delete',
-              onPressed: () => _handlePermanentDelete(r),
-            ),
+            if (SettingsService.role == 'owner')
+              IconButton(
+                icon: const Icon(Icons.delete_forever, color: Colors.red),
+                tooltip: 'Permanently Delete',
+                onPressed: () => _handlePermanentDelete(r),
+              ),
           ],
         ),
       ),

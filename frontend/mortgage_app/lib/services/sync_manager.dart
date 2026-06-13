@@ -443,6 +443,11 @@ class SyncManager {
 
     // 404 on DELETE = already deleted on server → treat as success
     if (response.statusCode == 403) {
+      // Refresh role immediately in background to update UI
+      ApiService().fetchProfile().then((profile) {
+        final role = profile['role'] as String? ?? 'owner';
+        SettingsService.setRole(role);
+      }).catchError((_) {});
       throw const FormatException('CONFLICT_403:Permission Denied by Server.');
     }
     final isDeleteNotFound = action.method.toUpperCase() == 'DELETE' &&

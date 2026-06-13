@@ -10,6 +10,7 @@ import 'screens/login_screen.dart';
 import 'services/settings_service.dart';
 import 'services/local_db_service.dart';
 import 'services/sync_manager.dart';
+import 'services/api_service.dart';
 import 'screens/app_lock_screen.dart';
 
 void main() async {
@@ -31,6 +32,14 @@ void main() async {
     LocalDbService.setUserNamespace(savedUsername);
     await LocalDbService.openUserBoxes();
     SyncManager().initialize();
+    
+    // Silently refresh role on startup
+    ApiService().fetchProfile().then((profile) {
+      final role = profile['role'] as String? ?? 'owner';
+      SettingsService.setRole(role);
+    }).catchError((_) {
+      // Ignore errors, continue with cached role
+    });
   }
 
   runApp(const MortgageApp());
@@ -214,38 +223,44 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
 
-  late final List<Widget> _screens;
-  late final List<NavigationDestination> _destinations;
-
-  @override
-  void initState() {
-    super.initState();
-    final isOwner = SettingsService.role == 'owner';
-    _screens = [
-      const DashboardScreen(),
-      const PartyScreen(),
-      const SearchScreen(),
-      if (isOwner) const SettingsScreen(),
-    ];
-    _destinations = [
-      const NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-      const NavigationDestination(icon: Icon(Icons.people_outlined), selectedIcon: Icon(Icons.people), label: 'Parties'),
-      const NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search), label: 'Search'),
-      if (isOwner) const NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
-    return AppLockWrapper(
-      child: Scaffold(
-        body: IndexedStack(index: _currentIndex, children: _screens),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _currentIndex,
-          onDestinationSelected: (i) => setState(() => _currentIndex = i),
-          destinations: _destinations,
-        ),
-      ),
+    return ValueListenableBuilder<String>(
+      valueListenable: SettingsService.roleNotifier,
+      builder: (context, role, _) {
+        final isOwner = role == 'owner';
+        final screens = [
+          const DashboardScreen(),
+          const PartyScreen(),
+          const SearchScreen(),
+          if (isOwner) const SettingsScreen(),
+        ];
+        final destinations = [
+          const NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Dashboard'),
+          const NavigationDestination(icon: Icon(Icons.people_outlined), selectedIcon: Icon(Icons.people), label: 'Parties'),
+          const NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search), label: 'Search'),
+          if (isOwner) const NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
+        ];
+
+        // Safe fallback if role changes from owner -> staff while on settings tab
+        int safeIndex = _currentIndex;
+        if (safeIndex >= screens.length) {
+          safeIndex = 0;
+        }
+
+        return AppLockWrapper(
+          child: Scaffold(
+            body: IndexedStack(index: safeIndex, children: screens),
+            bottomNavigationBar: NavigationBar(
+              selectedIndex: safeIndex,
+              onDestinationSelected: (i) {
+                setState(() => _currentIndex = i);
+              },
+              destinations: destinations,
+            ),
+          ),
+        );
+      },
     );
   }
 }

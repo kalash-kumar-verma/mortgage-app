@@ -18,11 +18,16 @@ from .serializers import (
 
 from rest_framework import permissions
 
-class OwnerOnlyDelete(permissions.BasePermission):
+class OwnerOnlyDestructive(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
-        if request.method == 'DELETE':
+        
+        is_destructive = request.method == 'DELETE' or (
+            hasattr(view, 'action') and view.action in ['withdraw', 'mark_overdue']
+        )
+        
+        if is_destructive:
             role = getattr(request.user.profile, 'role', 'owner') if hasattr(request.user, 'profile') else 'owner'
             return role == 'owner'
         return True
@@ -164,7 +169,7 @@ class BusinessSettingView(views.APIView):
 
 class PartyViewSet(viewsets.ModelViewSet):
     serializer_class = PartySerializer
-    permission_classes = [IsAuthenticated, OwnerOnlyDelete]
+    permission_classes = [IsAuthenticated, OwnerOnlyDestructive]
 
     def get_queryset(self):
         """Only return parties owned by the current user."""
@@ -184,7 +189,7 @@ class PartyViewSet(viewsets.ModelViewSet):
 
 class EntryViewSet(viewsets.ModelViewSet):
     serializer_class = EntrySerializer
-    permission_classes = [IsAuthenticated, OwnerOnlyDelete]
+    permission_classes = [IsAuthenticated, OwnerOnlyDestructive]
 
     def get_queryset(self):
         """Only return entries whose party belongs to the current user."""
@@ -358,7 +363,7 @@ class EntryViewSet(viewsets.ModelViewSet):
 
 class JewelleryItemViewSet(viewsets.ModelViewSet):
     serializer_class = JewelleryItemSerializer
-    permission_classes = [IsAuthenticated, OwnerOnlyDelete]
+    permission_classes = [IsAuthenticated, OwnerOnlyDestructive]
 
     def get_queryset(self):
         """Only return items whose entry belongs to a party owned by the current user."""
@@ -421,7 +426,7 @@ class JewelleryItemViewSet(viewsets.ModelViewSet):
 
 class PartialPaymentViewSet(viewsets.ModelViewSet):
     serializer_class = PartialPaymentSerializer
-    permission_classes = [IsAuthenticated, OwnerOnlyDelete]
+    permission_classes = [IsAuthenticated, OwnerOnlyDestructive]
 
     def get_queryset(self):
         # Users can only see payments for entries linked to parties they own
@@ -429,7 +434,7 @@ class PartialPaymentViewSet(viewsets.ModelViewSet):
 
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
-    permission_classes = [IsAuthenticated, OwnerOnlyDelete]
+    permission_classes = [IsAuthenticated, OwnerOnlyDestructive]
 
     def get_queryset(self):
         # Users can only see their own activities

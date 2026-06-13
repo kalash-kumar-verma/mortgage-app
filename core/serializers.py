@@ -33,6 +33,19 @@ class EntrySerializer(serializers.ModelSerializer):
         model = Entry
         fields = '__all__'
 
+    def update(self, instance, validated_data):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            role = getattr(request.user.profile, 'role', 'owner') if hasattr(request.user, 'profile') else 'owner'
+            if role != 'owner':
+                protected_fields = ['amount', 'interest', 'entry_date', 'status', 'party']
+                for field in protected_fields:
+                    if field in validated_data and validated_data[field] != getattr(instance, field):
+                        raise serializers.ValidationError(
+                            {field: f"Only owners can modify the '{field}' field after creation."}
+                        )
+        return super().update(instance, validated_data)
+
 
 class JewelleryItemSerializer(serializers.ModelSerializer):
     class Meta:

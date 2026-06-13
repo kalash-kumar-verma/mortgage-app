@@ -252,12 +252,17 @@ class _PartyDetailScreenState extends State<PartyDetailScreen> {
                                         ),
                                     ],
                                   ),
-                                  trailing: SettingsService.role == 'owner'
-                                      ? IconButton(
-                                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                          onPressed: () => _deleteEntry(e),
-                                        )
-                                      : null,
+                                  trailing: ValueListenableBuilder<String>(
+                                    valueListenable: SettingsService.roleNotifier,
+                                    builder: (context, role, _) {
+                                      return role == 'owner'
+                                          ? IconButton(
+                                              icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                              onPressed: () => _deleteEntry(e),
+                                            )
+                                          : const SizedBox.shrink();
+                                    },
+                                  ),
                                   isThreeLine: true,
                                 ),
                               );

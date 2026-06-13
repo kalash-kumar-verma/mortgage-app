@@ -514,11 +514,17 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                               tooltip: 'Release Item',
                               onPressed: () => _showReleaseDialog(item),
                             ),
-                          if (SettingsService.role == 'owner')
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline, color: Colors.red),
-                              onPressed: () => _deleteItem(item),
-                            ),
+                          ValueListenableBuilder<String>(
+                            valueListenable: SettingsService.roleNotifier,
+                            builder: (context, role, _) {
+                              return role == 'owner'
+                                  ? IconButton(
+                                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                      onPressed: () => _deleteItem(item),
+                                    )
+                                  : const SizedBox.shrink();
+                            },
+                          ),
                         ],
                       )
                     : null,

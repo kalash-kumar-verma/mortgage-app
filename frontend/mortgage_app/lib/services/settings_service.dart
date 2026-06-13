@@ -33,9 +33,12 @@ class SettingsService {
   /// Dark mode notifier — listen to this in MaterialApp for reactive theme switching.
   static final ValueNotifier<bool> darkModeNotifier = ValueNotifier<bool>(false);
 
+  static final ValueNotifier<String> roleNotifier = ValueNotifier<String>('owner');
+
   /// Call after Hive is open to prime the notifier from persisted value.
   static void initNotifiers() {
     darkModeNotifier.value = darkMode;
+    roleNotifier.value = role;
   }
 
   // ─── API ────────────────────────────────────────────────────────
@@ -63,7 +66,10 @@ class SettingsService {
   }
 
   static String get role => _box.get('role', defaultValue: 'owner');
-  static Future<void> setRole(String role) => _box.put('role', role);
+  static Future<void> setRole(String role) async {
+    await _box.put('role', role);
+    roleNotifier.value = role;
+  }
 
   // ─── Display ────────────────────────────────────────────────────
   static String get businessName =>

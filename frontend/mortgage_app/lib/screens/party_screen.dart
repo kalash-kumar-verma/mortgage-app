@@ -201,12 +201,17 @@ class _PartyScreenState extends State<PartyScreen> {
                                 ],
                               )
                             : null,
-                        trailing: SettingsService.role == 'owner'
-                            ? IconButton(
-                                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                onPressed: () => _deleteParty(p),
-                              )
-                            : null,
+                        trailing: ValueListenableBuilder<String>(
+                          valueListenable: SettingsService.roleNotifier,
+                          builder: (context, role, _) {
+                            return role == 'owner'
+                                ? IconButton(
+                                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                    onPressed: () => _deleteParty(p),
+                                  )
+                                : const SizedBox.shrink();
+                          },
+                        ),
                         onTap: () {
                           Navigator.push(context, MaterialPageRoute(builder: (_) => PartyDetailScreen(party: p)));
                         },
