@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:uuid/uuid.dart';
 
@@ -488,12 +489,56 @@ class LocalDbService {
     return all.take(limit).toList();
   }
 
-  static List<Entry> searchEntries(String query) {
-    final lowerQuery = query.toLowerCase();
+  static List<Party> searchAdvancedParties(String query) {
+    final lowerQuery = query.toLowerCase().trim();
+    if (lowerQuery.isEmpty) return getParties();
+
+    return partyBox.values.where((p) {
+      return p.name.toLowerCase().contains(lowerQuery) ||
+          p.phone.toLowerCase().contains(lowerQuery) ||
+          (p.syncId?.toLowerCase().contains(lowerQuery) ?? false);
+    }).toList().reversed.toList();
+  }
+
+  static List<Entry> searchAdvancedEntries({
+    String query = '',
+    List<String> statuses = const [],
+    DateTimeRange? dateRange,
+  }) {
+    final lowerQuery = query.toLowerCase().trim();
+    
     return entryBox.values.where((e) {
-      if (e.status == 'DELETED') return false;
-      return e.srNumber.toLowerCase().contains(lowerQuery) ||
-          e.partyName.toLowerCase().contains(lowerQuery);
+      // 1. Text Query Filter (SR number or Party Name)
+      if (lowerQuery.isNotEmpty) {
+        final matchesText = e.srNumber.toLowerCase().contains(lowerQuery) ||
+            e.partyName.toLowerCase().contains(lowerQuery);
+        if (!matchesText) return false;
+      }
+
+      // 2. Status Filter
+      if (statuses.isNotEmpty) {
+        // If searching specifically for DELETED, we wouldn't find it in entryBox anyway, 
+        // tombstoneBox handles that in the UI. But if they don't specify DELETED,
+        // we must exclude DELETED entries from showing up in normal results.
+        if (!statuses.contains(e.status)) return false;
+      } else {
+        if (e.status == 'DELETED') return false;
+      }
+
+      // 3. Date Range Filter
+      if (dateRange != null) {
+        final entryDate = DateTime.tryParse(e.date);
+        if (entryDate == null) return false;
+        
+        // Strip time from entryDate for inclusive day comparison
+        final eDate = DateTime(entryDate.year, entryDate.month, entryDate.day);
+        final start = DateTime(dateRange.start.year, dateRange.start.month, dateRange.start.day);
+        final end = DateTime(dateRange.end.year, dateRange.end.month, dateRange.end.day);
+        
+        if (eDate.isBefore(start) || eDate.isAfter(end)) return false;
+      }
+
+      return true;
     }).toList().reversed.toList();
   }
 
