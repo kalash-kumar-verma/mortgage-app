@@ -573,12 +573,12 @@ class LocalDbService {
     for (final e in entryBox.values) {
       if (e.status == 'DELETED') continue;
       totalEntries++;
-      if (e.status == 'ACTIVE') {
-        active++;
-        activeAmount += double.tryParse(e.amount) ?? 0;
-      } else if (e.status == 'OVERDUE' || e.isDueDatePassed) {
+      if (e.status == 'OVERDUE' || (e.status == 'ACTIVE' && e.isDueDatePassed)) {
         overdue++;
         overdueAmount += double.tryParse(e.amount) ?? 0;
+      } else if (e.status == 'ACTIVE') {
+        active++;
+        activeAmount += double.tryParse(e.amount) ?? 0;
       } else if (e.status == 'WITHDRAWN') {
         withdrawn++;
       } else if (e.status == 'CLOSED') {
