@@ -153,12 +153,31 @@ class LocalDbService {
     final serverId = tombstoneBox.get(syncId) ?? 0;
     
     if (type == 'Entry') {
-      final entry = Entry.fromJson(payload);
-      final partyId = entry.party;
-      final p = partyBox.values.firstWhere((p) => p.id == partyId, orElse: () => Party(id: -999, syncId: '', name: '', phone: '', address: '', defaultInterestRate: 0, note: ''));
-      if (p.id == -999) {
+      final partySyncId = payload['party_sync_id'];
+      Party? p;
+      if (partySyncId != null) {
+        p = partyBox.get(partySyncId);
+      } else {
+        final partyId = payload['party'];
+        p = partyBox.values.cast<Party?>().firstWhere((p) => p?.id == partyId, orElse: () => null);
+      }
+      if (p == null) {
         throw Exception('Cannot restore Entry: The parent Party is deleted. Please restore the Party first.');
       }
+      payload['party'] = p.id;
+    } else if (type == 'Item' || type == 'Payment') {
+      final entrySyncId = payload['entry_sync_id'];
+      Entry? e;
+      if (entrySyncId != null) {
+        e = entryBox.get(entrySyncId);
+      } else {
+        final entryId = payload['entry'];
+        e = entryBox.values.cast<Entry?>().firstWhere((e) => e?.id == entryId, orElse: () => null);
+      }
+      if (e == null) {
+        throw Exception('Cannot restore $type: The parent Entry is deleted. Please restore the Entry first.');
+      }
+      payload['entry'] = e.id;
     }
 
     bool pendingDeleteCanceled = false;
@@ -195,8 +214,12 @@ class LocalDbService {
       
       if (type == 'Entry') {
         final partyId = payload['party'];
-        final parentParty = partyBox.values.firstWhere((p) => p.id == partyId, orElse: () => Party(id: -999, syncId: '', name: '', phone: '', address: '', defaultInterestRate: 0, note: ''));
-        newPayload['party_sync_id'] = parentParty.syncId;
+        final parentParty = partyBox.values.cast<Party?>().firstWhere((p) => p?.id == partyId, orElse: () => null);
+        if (parentParty != null) newPayload['party_sync_id'] = parentParty.syncId;
+      } else if (type == 'Item' || type == 'Payment') {
+        final entryId = payload['entry'];
+        final parentEntry = entryBox.values.cast<Entry?>().firstWhere((e) => e?.id == entryId, orElse: () => null);
+        if (parentEntry != null) newPayload['entry_sync_id'] = parentEntry.syncId;
       }
       
       await _queueAction('POST', endpoint, newPayload);
@@ -517,10 +540,11 @@ class LocalDbService {
 
       // 2. Status Filter
       if (statuses.isNotEmpty) {
-        // If searching specifically for DELETED, we wouldn't find it in entryBox anyway, 
-        // tombstoneBox handles that in the UI. But if they don't specify DELETED,
-        // we must exclude DELETED entries from showing up in normal results.
-        if (!statuses.contains(e.status)) return false;
+        bool matchesStatus = statuses.contains(e.status);
+        if (statuses.contains('OVERDUE') && e.isDueDatePassed) {
+          matchesStatus = true;
+        }
+        if (!matchesStatus) return false;
       } else {
         if (e.status == 'DELETED') return false;
       }
@@ -552,7 +576,7 @@ class LocalDbService {
       if (e.status == 'ACTIVE') {
         active++;
         activeAmount += double.tryParse(e.amount) ?? 0;
-      } else if (e.status == 'OVERDUE') {
+      } else if (e.status == 'OVERDUE' || e.isDueDatePassed) {
         overdue++;
         overdueAmount += double.tryParse(e.amount) ?? 0;
       } else if (e.status == 'WITHDRAWN') {
@@ -628,7 +652,10 @@ class LocalDbService {
     final syncId  = entry.syncId;
     final entryLabel = '${entry.srNumber} — ${entry.partyName}';
     final entryDetail = '₹${entry.amount}  ·  ${entry.status}';
-    final payload = jsonEncode(entry.toJson());
+    final payloadMap = entry.toJson();
+    final parentParty = partyBox.values.firstWhere((p) => p.id == entry.party, orElse: () => Party(id: -999, syncId: '', name: '', phone: '', address: '', defaultInterestRate: 0, note: ''));
+    if (parentParty.id != -999) payloadMap['party_sync_id'] = parentParty.syncId;
+    final payload = jsonEncode(payloadMap);
 
     // Delete related items
     final relatedItems = itemBox.values
@@ -787,7 +814,12 @@ class LocalDbService {
     final itemId = item.id;
     final syncId = item.syncId;
     final payload = item.toJson();
-    if (parentSyncId != null) payload['entry_sync_id'] = parentSyncId;
+    if (parentSyncId != null) {
+      payload['entry_sync_id'] = parentSyncId;
+    } else {
+      final parentEntry = entryBox.values.cast<Entry?>().firstWhere((e) => e?.id == item.entry, orElse: () => null);
+      if (parentEntry?.syncId != null) payload['entry_sync_id'] = parentEntry!.syncId;
+    }
     final payloadStr = jsonEncode(payload);
 
     await item.delete();
@@ -852,7 +884,12 @@ class LocalDbService {
     final paymentId = payment.id;
     final syncId = payment.syncId;
     final payload = payment.toJson();
-    if (parentSyncId != null) payload['entry_sync_id'] = parentSyncId;
+    if (parentSyncId != null) {
+      payload['entry_sync_id'] = parentSyncId;
+    } else {
+      final parentEntry = entryBox.values.cast<Entry?>().firstWhere((e) => e?.id == payment.entry, orElse: () => null);
+      if (parentEntry?.syncId != null) payload['entry_sync_id'] = parentEntry!.syncId;
+    }
     final payloadStr = jsonEncode(payload);
 
     await payment.delete();

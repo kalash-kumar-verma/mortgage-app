@@ -64,7 +64,10 @@ class FilteredEntryListScreen extends StatelessWidget {
           final all = box.values.toList();
           final filtered = statusFilter == null
               ? all.where((e) => e.status != 'DELETED').toList()
-              : all.where((e) => e.status == statusFilter).toList();
+              : all.where((e) {
+                  if (statusFilter == 'OVERDUE') return e.status == 'OVERDUE' || e.isDueDatePassed;
+                  return e.status == statusFilter;
+                }).toList();
 
           // Sort: active/overdue first by date desc, withdrawn last by date desc
           filtered.sort((a, b) {

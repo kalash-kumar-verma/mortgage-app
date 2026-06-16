@@ -55,6 +55,12 @@ class _EditEntryScreenState extends State<EditEntryScreen> {
       '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
 
   Future<void> _save() async {
+    final val = double.tryParse(_amountController.text.trim()) ?? 0.0;
+    if (val >= 100000000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Amount must be less than 10 crores.')));
+      return;
+    }
     setState(() => _loading = true);
     try {
       final updated = Entry(

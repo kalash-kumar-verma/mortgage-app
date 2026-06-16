@@ -45,7 +45,7 @@ class AnalyticsService {
     for (final entry in LocalDbService.entryBox.values) {
       if (entry.status == 'DELETED') continue;
       
-      final isOverdue = entry.status == 'OVERDUE';
+      final isOverdue = entry.status == 'OVERDUE' || entry.isDueDatePassed;
       final isActive = entry.status == 'ACTIVE' || isOverdue;
       final isWithdrawn = entry.status == 'WITHDRAWN' || entry.status == 'CLOSED';
 
@@ -98,7 +98,7 @@ class AnalyticsService {
       final partyId = entry.party;
       if (!customerMap.containsKey(partyId)) continue;
       
-      final isActive = entry.status == 'ACTIVE' || entry.status == 'OVERDUE';
+      final isActive = entry.status == 'ACTIVE' || entry.status == 'OVERDUE' || entry.isDueDatePassed;
       
       final existing = customerMap[partyId]!;
       customerMap[partyId] = TopCustomer(

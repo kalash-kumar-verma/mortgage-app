@@ -323,6 +323,9 @@ class SyncManager {
       if (payloadMap.containsKey('party_sync_id')) {
         final p = LocalDbService.partyBox.get(payloadMap['party_sync_id']);
         if (p == null || p.id == null || p.id! <= 0) {
+          if (LocalDbService.getQuarantinedSyncIds().contains(payloadMap['party_sync_id'])) {
+            throw const FormatException('CONFLICT_400: Parent party sync was abandoned.');
+          }
           throw Exception('Parent party not yet synced to server — deferring entry sync');
         }
         payloadMap['party'] = p.id;
@@ -335,6 +338,9 @@ class SyncManager {
       if (payloadMap.containsKey('entry_sync_id')) {
         final e = LocalDbService.entryBox.get(payloadMap['entry_sync_id']);
         if (e == null || e.id == null || e.id! <= 0) {
+          if (LocalDbService.getQuarantinedSyncIds().contains(payloadMap['entry_sync_id'])) {
+            throw const FormatException('CONFLICT_400: Parent entry sync was abandoned.');
+          }
           throw Exception('Parent entry not yet synced to server — deferring payment sync');
         }
         payloadMap['entry'] = e.id;
@@ -429,9 +435,12 @@ class SyncManager {
            throw const FormatException('CONFLICT_404:Parent deleted on server.');
          }
          
-         // Only force-abandon 400s for activities if it's a validation error about the action enum
          if (action.endpoint.startsWith('activities/')) {
            final bodyStr = response.body.toLowerCase();
+           if (bodyStr.contains('already exists')) {
+             debugPrint('[SyncManager] Activity log already exists on server — treating as idempotent success.');
+             return;
+           }
            if (bodyStr.contains('is not a valid choice') || bodyStr.contains('invalid choice')) {
              throw FormatException('CONFLICT_400:Validation error on activity action: ${response.body}');
            }
@@ -474,6 +483,9 @@ class SyncManager {
     if (map.containsKey('entry_sync_id')) {
       final e = LocalDbService.entryBox.get(map['entry_sync_id']);
       if (e == null || e.id == null || e.id! <= 0) {
+        if (LocalDbService.getQuarantinedSyncIds().contains(map['entry_sync_id'])) {
+          throw const FormatException('CONFLICT_400: Parent entry sync was abandoned.');
+        }
         throw Exception('Parent entry not yet synced to server');
       }
       map['entry'] = e.id;
@@ -521,8 +533,8 @@ class SyncManager {
           final oldId = p.id;
           p.id = newId;
           await LocalDbService.partyBox.put(syncId, p);
-          // Cascade to entries that linked via negative temp ID
-          if (oldId != null && oldId < 0) {
+          // Cascade to entries that linked via negative temp ID or restored ID
+          if (oldId != null && oldId != newId) {
             for (final e in LocalDbService.entryBox.values
                 .where((e) => e.party == oldId)
                 .toList()) {
@@ -538,8 +550,8 @@ class SyncManager {
           if (data['sr_number'] != null) e.srNumber = data['sr_number'] as String;
           e.id = newId;
           await LocalDbService.entryBox.put(syncId, e);
-          // Cascade to items that linked via negative temp ID
-          if (oldId != null && oldId < 0) {
+          // Cascade to items/payments that linked via negative temp ID or restored ID
+          if (oldId != null && oldId != newId) {
             for (final i in LocalDbService.itemBox.values
                 .where((i) => i.entry == oldId)
                 .toList()) {
@@ -597,6 +609,18 @@ class SyncManager {
   ///   - Server MISSING record, local EXISTS, locally tombstoned → skip (we deleted it)
   ///   - Server MISSING record, local EXISTS, pending queue op → skip (our own unsynced create)
   ///   - Server MISSING record, local EXISTS, no pending op → DELETE locally (another device deleted it)
+  bool _hasLivePendingAction(String syncId, int? serverId) {
+    for (final action in LocalDbService.syncBox.values) {
+      if ((action.payload?.contains(syncId) ?? false) || action.endpoint.contains(syncId)) {
+        return true;
+      }
+      if (serverId != null && serverId > 0 && action.endpoint.contains('/$serverId/')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> _smartPullSync() async {
     try {
       // Build set of syncIds/serverIds that have pending queue ops.
@@ -683,7 +707,8 @@ class SyncManager {
             if (serverEntry.id != null && localEntry.id != serverEntry.id) { localEntry.id = serverEntry.id; dirty = true; }
             
             final hasPendingOp = pendingSyncIds.contains(localEntry.syncId) || 
-                                 (localEntry.id != null && pendingSyncIds.contains(localEntry.id.toString()));
+                                 (localEntry.id != null && pendingSyncIds.contains(localEntry.id.toString())) ||
+                                 _hasLivePendingAction(localEntry.syncId ?? '', localEntry.id);
             final isQuarantined = quarantinedSyncIds.contains(localEntry.syncId) ||
                                   (localEntry.id != null && quarantinedSyncIds.contains(localEntry.id.toString()));
                                  
@@ -716,7 +741,8 @@ class SyncManager {
               if (serverItem.id != null && localItem.id != serverItem.id) { localItem.id = serverItem.id; dirty = true; }
               
               final hasPendingOp = pendingSyncIds.contains(localItem.syncId) || 
-                                   (localItem.id != null && pendingSyncIds.contains(localItem.id.toString()));
+                                   (localItem.id != null && pendingSyncIds.contains(localItem.id.toString())) ||
+                                   _hasLivePendingAction(localItem.syncId ?? '', localItem.id);
               final isQuarantined = quarantinedSyncIds.contains(localItem.syncId) ||
                                     (localItem.id != null && quarantinedSyncIds.contains(localItem.id.toString()));
                                    
@@ -740,7 +766,7 @@ class SyncManager {
             final itemSyncId = localItem.syncId ?? '';
             if (serverItemSyncIds.contains(itemSyncId)) continue;
             if (LocalDbService.isTombstoned(itemSyncId)) continue;
-            if (pendingSyncIds.contains(itemSyncId)) continue;
+            if (pendingSyncIds.contains(itemSyncId) || _hasLivePendingAction(itemSyncId, localItem.id)) continue;
             if (quarantinedSyncIds.contains(itemSyncId)) continue;
             debugPrint('[SyncManager] Reconcile: removing item $itemSyncId (deleted on server)');
             await localItem.delete();
@@ -762,7 +788,8 @@ class SyncManager {
               if (serverPayment.id != null && localPayment.id != serverPayment.id) { localPayment.id = serverPayment.id; dirty = true; }
               
               final hasPendingOp = pendingSyncIds.contains(localPayment.syncId) || 
-                                   (localPayment.id != null && pendingSyncIds.contains(localPayment.id.toString()));
+                                   (localPayment.id != null && pendingSyncIds.contains(localPayment.id.toString())) ||
+                                   _hasLivePendingAction(localPayment.syncId ?? '', localPayment.id);
               final isQuarantined = quarantinedSyncIds.contains(localPayment.syncId) ||
                                     (localPayment.id != null && quarantinedSyncIds.contains(localPayment.id.toString()));
                                    
@@ -779,7 +806,7 @@ class SyncManager {
             final paymentSyncId = localPayment.syncId ?? '';
             if (serverPaymentSyncIds.contains(paymentSyncId)) continue;
             if (LocalDbService.isTombstoned(paymentSyncId)) continue;
-            if (pendingSyncIds.contains(paymentSyncId)) continue;
+            if (pendingSyncIds.contains(paymentSyncId) || _hasLivePendingAction(paymentSyncId, localPayment.id)) continue;
             if (quarantinedSyncIds.contains(paymentSyncId)) continue;
             debugPrint('[SyncManager] Reconcile: removing payment $paymentSyncId (deleted on server)');
             await localPayment.delete();
@@ -792,11 +819,31 @@ class SyncManager {
           final entrySyncId = localEntry.syncId ?? '';
           if (serverEntrySyncIds.contains(entrySyncId)) continue;
           if (LocalDbService.isTombstoned(entrySyncId)) continue;
-          if (pendingSyncIds.contains(entrySyncId)) continue;
+          if (pendingSyncIds.contains(entrySyncId) || _hasLivePendingAction(entrySyncId, localEntry.id)) continue;
           if (quarantinedSyncIds.contains(entrySyncId)) continue;
+
+          bool protectedChild = false;
+          for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (localEntry.id ?? -1)).toList()) {
+            final itemSyncId = item.syncId ?? '';
+            if (pendingSyncIds.contains(itemSyncId) || quarantinedSyncIds.contains(itemSyncId)) { protectedChild = true; break; }
+          }
+          if (!protectedChild) {
+            for (final payment in LocalDbService.paymentBox.values.where((p) => p.entry == (localEntry.id ?? -1)).toList()) {
+              final paymentSyncId = payment.syncId ?? '';
+              if (pendingSyncIds.contains(paymentSyncId) || quarantinedSyncIds.contains(paymentSyncId)) { protectedChild = true; break; }
+            }
+          }
+          if (protectedChild) {
+            debugPrint('[SyncManager] Reconcile: skipping entry $entrySyncId deletion due to protected child records.');
+            continue;
+          }
+
           debugPrint('[SyncManager] Reconcile: removing entry $entrySyncId (deleted on server)');
           for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (localEntry.id ?? -1)).toList()) {
             await item.delete();
+          }
+          for (final payment in LocalDbService.paymentBox.values.where((p) => p.entry == (localEntry.id ?? -1)).toList()) {
+            await payment.delete();
           }
           await localEntry.delete();
         }
@@ -807,12 +854,38 @@ class SyncManager {
         final partySyncId = localParty.syncId ?? '';
         if (serverPartySyncIds.contains(partySyncId)) continue;
         if (LocalDbService.isTombstoned(partySyncId)) continue;
-        if (pendingSyncIds.contains(partySyncId)) continue;
+        if (pendingSyncIds.contains(partySyncId) || _hasLivePendingAction(partySyncId, localParty.id)) continue;
         if (quarantinedSyncIds.contains(partySyncId)) continue;
+        
+        bool protectedChild = false;
+        for (final entry in LocalDbService.entryBox.values.where((e) => e.party == (localParty.id ?? -1)).toList()) {
+          final entrySyncId = entry.syncId ?? '';
+          if (pendingSyncIds.contains(entrySyncId) || quarantinedSyncIds.contains(entrySyncId)) { protectedChild = true; break; }
+          for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (entry.id ?? -1)).toList()) {
+            final itemSyncId = item.syncId ?? '';
+            if (pendingSyncIds.contains(itemSyncId) || quarantinedSyncIds.contains(itemSyncId)) { protectedChild = true; break; }
+          }
+          if (!protectedChild) {
+            for (final payment in LocalDbService.paymentBox.values.where((p) => p.entry == (entry.id ?? -1)).toList()) {
+              final paymentSyncId = payment.syncId ?? '';
+              if (pendingSyncIds.contains(paymentSyncId) || quarantinedSyncIds.contains(paymentSyncId)) { protectedChild = true; break; }
+            }
+          }
+          if (protectedChild) break;
+        }
+        
+        if (protectedChild) {
+          debugPrint('[SyncManager] Reconcile: skipping party $partySyncId deletion due to protected child records.');
+          continue;
+        }
+
         debugPrint('[SyncManager] Reconcile: removing party $partySyncId (deleted on server)');
         for (final entry in LocalDbService.entryBox.values.where((e) => e.party == (localParty.id ?? -1)).toList()) {
           for (final item in LocalDbService.itemBox.values.where((i) => i.entry == (entry.id ?? -1)).toList()) {
             await item.delete();
+          }
+          for (final payment in LocalDbService.paymentBox.values.where((p) => p.entry == (entry.id ?? -1)).toList()) {
+            await payment.delete();
           }
           await entry.delete();
         }

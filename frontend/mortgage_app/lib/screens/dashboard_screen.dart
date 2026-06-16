@@ -11,6 +11,7 @@ import 'sync_diagnostics_screen.dart';
 import 'filtered_entry_list_screen.dart';
 import 'party_screen.dart';
 import 'reports_screen.dart';
+import 'overdue_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -535,6 +536,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     '₹${(_stats!['overdue_amount'] as double).toStringAsFixed(0)}',
                                 color: Colors.orange[700]!,
                                 icon: Icons.currency_rupee,
+                                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OverdueScreen())),
                               ),
                             ),
                           ],

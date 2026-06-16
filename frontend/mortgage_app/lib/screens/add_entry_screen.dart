@@ -61,6 +61,12 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
           const SnackBar(content: Text('Amount is required')));
       return;
     }
+    final val = double.tryParse(_amountController.text.trim()) ?? 0.0;
+    if (val >= 100000000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Amount must be less than 10 crores.')));
+      return;
+    }
     setState(() => _loading = true);
     try {
       int maxSr = 0;
