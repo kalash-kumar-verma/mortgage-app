@@ -391,7 +391,7 @@ class SyncManager {
           final body = payloadMap != null ? jsonEncode(payloadMap) : null;
           response = await http
               .post(uri, headers: headers, body: body)
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 45));
         }
         break;
 
@@ -399,13 +399,13 @@ class SyncManager {
         final body = payloadMap != null ? jsonEncode(payloadMap) : null;
         response = await http
             .patch(uri, headers: headers, body: body)
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 45));
         break;
 
       case 'DELETE':
         response = await http
             .delete(uri, headers: headers)
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 45));
         break;
 
       default:
